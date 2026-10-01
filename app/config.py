@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=4096, gt=0)
     # Server-side refusal fallback (Claude API only). Disable for providers/models that reject it.
     llm_refusal_fallback: bool = True
+    # Read from env or .env. SecretStr keeps it out of reprs and logs. If unset, the
+    # Anthropic SDK falls back to its own resolution (ANTHROPIC_AUTH_TOKEN, `ant auth login`).
+    anthropic_api_key: SecretStr | None = None
 
     # Chunking (sizes are approximate tokens, see app/ingest/chunker.py)
     chunk_size: int = Field(default=250, gt=0)

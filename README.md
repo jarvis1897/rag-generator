@@ -88,7 +88,7 @@ Everything comes from environment variables or `.env` (see [.env.example](.env.e
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | (none) | Read by the Anthropic SDK from the environment, never logged |
+| `ANTHROPIC_API_KEY` | (none) | From the environment or `.env`; held as a secret and never logged. If unset, the SDK falls back to `ANTHROPIC_AUTH_TOKEN` or an `ant auth login` profile |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Any other name loads via `sentence-transformers` (install it separately) |
 | `LLM_PROVIDER` | `anthropic` | Only provider implemented; see `app/llm.py` to add one |
 | `LLM_MODEL` | `claude-opus-5` | |

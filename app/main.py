@@ -192,5 +192,9 @@ def query_stream(collection_id: str, body: QueryRequest, st: AppState = Depends(
                 yield json.dumps(event) + "\n"
         except LLMError as exc:
             yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
+        except Exception:
+            # Headers are already sent, so an HTTP error is no longer possible; tell the client instead.
+            logger.exception("query stream failed")
+            yield json.dumps({"type": "error", "detail": "internal error while generating the answer"}) + "\n"
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson")
