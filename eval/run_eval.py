@@ -128,7 +128,7 @@ def main() -> int:
         flags = []
         for key in ("retrieval_hit", "page_hit", "contains_expected", "faithful", "refusal_correct"):
             if key in row:
-                flags.append(f"{key}={'✓' if row[key] else '✗'}")
+                flags.append(f"{key}={'ok' if row[key] else 'FAIL'}")
         print(f"[{i}] {q['question']}\n    -> {r['answer'][:160].replace(chr(10), ' ')}\n    {'  '.join(flags)}")
         results.append(row)
 
@@ -155,7 +155,7 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({"collection_id": cid, "summary": summary, "results": results}, indent=2))
     print(f"\nDetailed results: {args.out}")
-    return 0
+    return 1 if summary["errors"] else 0
 
 
 if __name__ == "__main__":
