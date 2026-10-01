@@ -1,0 +1,58 @@
+# Eval set over pg18-images-3.pdf (The Federalist Papers)
+#
+# Fields:
+#   question         the user question
+#   answerable       false for questions the documents cannot answer (refusal expected)
+#   expected_source  filename that should appear in the retrieved top-k
+#   expected_page    optional page that should appear for that file
+#   must_include     optional strings the answer should contain (case-insensitive)
+
+questions:
+  # Positive test cases (Directly answerable from pg18-images-3.pdf)
+  - question: In Federalist No. X, what two methods does Madison identify for curing the mischiefs of faction, and what are the two ways to remove its causes?
+    answerable: true
+    expected_source: pg18-images-3.pdf
+    expected_page: 50
+    must_include: ["removing its causes", "controlling its effects", "liberty", "same opinions"]
+
+  - question: According to Federalist No. XXIV, which two State constitutions contained an interdiction or caution regarding standing armies in time of peace?
+    answerable: true
+    expected_source: pg18-images-3.pdf
+    expected_page: 124  # the answer is in Publius's footnote on p.124, not on p.122
+    must_include: ["Pennsylvania", "North Carolina"]
+
+  - question: In Federalist No. XII, what estimate does Hamilton give for the total quantity of ardent spirits imported into the United States, and what revenue would a duty of one shilling per gallon generate?
+    answerable: true
+    expected_source: pg18-images-3.pdf
+    expected_page: 65
+    must_include: ["four millions", "two hundred thousand"]
+
+  - question: According to Federalist No. XX, how many men made up the standing army commanded by the stadtholder in the United Netherlands, and what was his revenue exclusive of private income?
+    answerable: true
+    expected_source: pg18-images-3.pdf
+    expected_page: 101
+    must_include: ["forty thousand", "three hundred thousand florins"]
+
+  - question: Under Federalist No. XXXII, in what three specific cases does the alienation or exclusive delegation of State sovereignty to the federal government exist?
+    answerable: true
+    expected_source: pg18-images-3.pdf
+    expected_page: 158
+    must_include: ["exclusive", "prohibit", "contradictory and repugnant"]  # "prohibit" matches prohibits/prohibited
+
+  # Answerable: Federalist No. LXXVIII (The Judiciary Department) starts on p.395.
+  - question: What specific arguments does Alexander Hamilton lay out in Federalist No. LXXVIII regarding the tenure of federal judges and life appointments?
+    answerable: true
+    expected_source: pg18-images-3.pdf
+    expected_page: 395  # tenure "during good behavior"; the "least dangerous" argument follows on p.396
+    must_include: ["good behavior"]
+
+  # Negative / Deliberately unanswerable test cases (Refusal or ungrounded detection expected)
+
+  - question: How many individual delegates signed the final Constitution at the Federal Convention on September 17, 1787?
+    answerable: false
+
+  - question: According to the text, what specific tax rate or tariff percentage did Great Britain set on American tobacco imports in 1788?
+    answerable: false
+
+  - question: What were the names of the four neutral Swiss cantons designated to select judges under the Swiss treaty of 1683?
+    answerable: false
