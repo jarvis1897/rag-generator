@@ -26,7 +26,7 @@ questions:
     answerable: true
     expected_source: pg18-images-3.pdf
     expected_page: 65
-    must_include: ["four millions", "two hundred thousand"]
+    must_include: ["four million", "two hundred thousand"]  # "four million" matches the text and paraphrases
 
   - question: According to Federalist No. XX, how many men made up the standing army commanded by the stadtholder in the United Netherlands, and what was his revenue exclusive of private income?
     answerable: true
