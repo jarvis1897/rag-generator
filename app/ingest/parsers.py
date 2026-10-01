@@ -24,10 +24,10 @@ class ParseError(ValueError):
 
 
 def _parse_pdf(data: bytes) -> list[Page]:
-    import fitz  # PyMuPDF
+    import pymupdf
 
     try:
-        with fitz.open(stream=data, filetype="pdf") as doc:
+        with pymupdf.open(stream=data, filetype="pdf") as doc:
             pages = [Page(page=i + 1, text=p.get_text("text")) for i, p in enumerate(doc)]
     except Exception as exc:  # PyMuPDF raises several unrelated types on bad input
         raise ParseError(f"could not read PDF: {exc}") from exc

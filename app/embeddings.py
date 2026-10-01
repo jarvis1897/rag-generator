@@ -13,12 +13,14 @@ logger = logging.getLogger(__name__)
 
 class Embedder(Protocol):
     model_name: str
+    max_input_tokens: int | None  # text beyond this is silently truncated by the model
 
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
 class OnnxMiniLMEmbedder:
     model_name = "all-MiniLM-L6-v2"
+    max_input_tokens = 256
 
     def __init__(self) -> None:
         from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
@@ -39,6 +41,7 @@ class SentenceTransformerEmbedder:
             ) from exc
         self.model_name = model_name
         self._model = SentenceTransformer(model_name)
+        self.max_input_tokens = self._model.max_seq_length
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return self._model.encode(texts, normalize_embeddings=True).tolist()

@@ -13,6 +13,7 @@ class FakeEmbedder:
 
     def __init__(self, model_name: str = "fake-embedder", dim: int = 256) -> None:
         self.model_name = model_name
+        self.max_input_tokens = None
         self.dim = dim
         self.calls: list[int] = []  # batch sizes, to check batching
 

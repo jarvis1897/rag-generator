@@ -22,12 +22,12 @@ class Settings(BaseSettings):
     llm_refusal_fallback: bool = True
 
     # Chunking (sizes are approximate tokens, see app/ingest/chunker.py)
-    chunk_size: int = Field(default=800, gt=0)
-    chunk_overlap: int = Field(default=100, ge=0)
+    chunk_size: int = Field(default=250, gt=0)
+    chunk_overlap: int = Field(default=40, ge=0)
 
     # Retrieval
     top_k: int = Field(default=5, gt=0)
-    min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0)
+    min_relevance_score: float = Field(default=0.25, ge=0.0, le=1.0)
     retrieval_mode: Literal["dense", "hybrid"] = "dense"
     history_turns: int = Field(default=6, ge=0)
 

@@ -7,9 +7,9 @@ from app.ingest.parsers import Page, ParseError, UnsupportedFileType, parse_file
 
 
 def make_pdf(pages: list[str]) -> bytes:
-    import fitz
+    import pymupdf
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     for text in pages:
         page = doc.new_page()
         page.insert_text((72, 72), text)

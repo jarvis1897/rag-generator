@@ -59,6 +59,10 @@ class DocumentStore:
         self._embedder = embedder
         self._batch_size = embedding_batch_size
 
+    @property
+    def embedder(self) -> Embedder:
+        return self._embedder
+
     # --- collections ---
 
     def create_collection(self, name: str) -> str:
