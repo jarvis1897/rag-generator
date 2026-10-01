@@ -7,6 +7,7 @@ the collection metadata and every write and query checks it.
 
 import hashlib
 import logging
+import math
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,14 @@ class RetrievedChunk:
     chunk_index: int
     doc_id: str
     score: float  # cosine similarity in [-1, 1]; higher is more relevant
+
+    @property
+    def chunk_id(self) -> str:
+        return chunk_id(self.doc_id, self.chunk_index)
+
+
+def chunk_id(doc_id: str, chunk_index: int) -> str:
+    return f"{doc_id}:{chunk_index}"
 
 
 def create_client(persist_dir: str | None) -> ClientAPI:
@@ -141,7 +150,7 @@ class DocumentStore:
         doc_id = content_hash[:16]
         vectors = embed_in_batches(self._embedder, [c.text for c in chunks], self._batch_size)
         col.add(
-            ids=[f"{doc_id}:{c.chunk_index}" for c in chunks],
+            ids=[chunk_id(doc_id, c.chunk_index) for c in chunks],
             embeddings=vectors,
             documents=[c.text for c in chunks],
             # Chroma metadata values must be str/int/float/bool: no None, no lists.
@@ -158,6 +167,9 @@ class DocumentStore:
         )
         return len(chunks)
 
+    def count(self, collection_id: str) -> int:
+        return self._get(collection_id).count()
+
     def all_chunks(self, collection_id: str) -> list[RetrievedChunk]:
         """Every chunk in a collection (score 0). Used to build the BM25 index."""
         col = self._checked(collection_id)
@@ -167,12 +179,18 @@ class DocumentStore:
             for doc, meta in zip(got["documents"] or [], got["metadatas"] or [])
         ]
 
-    def query(self, collection_id: str, text: str, top_k: int) -> list[RetrievedChunk]:
+    def embed_query(self, text: str) -> list[float]:
+        [vector] = self._embedder.embed([text])
+        return vector
+
+    def query(
+        self, collection_id: str, text: str, top_k: int, vector: list[float] | None = None
+    ) -> list[RetrievedChunk]:
         """Dense search within exactly one collection."""
         col = self._checked(collection_id)
         if col.count() == 0:
             return []
-        [vector] = self._embedder.embed([text])
+        vector = vector if vector is not None else self.embed_query(text)
         res = col.query(
             query_embeddings=[vector],
             n_results=min(top_k, col.count()),
@@ -182,6 +200,19 @@ class DocumentStore:
             _to_chunk(doc, meta, 1.0 - float(dist))  # cosine distance -> similarity
             for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0])
         ]
+
+    def similarities(self, collection_id: str, vector: list[float], ids: list[str]) -> dict[str, float]:
+        """Cosine similarity between `vector` and the stored embeddings of `ids`."""
+        if not ids:
+            return {}
+        got = self._checked(collection_id).get(ids=ids, include=["embeddings"])
+        return {i: _cosine(vector, list(e)) for i, e in zip(got["ids"], got["embeddings"])}
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
 
 
 def _to_chunk(doc: str, meta: Any, score: float) -> RetrievedChunk:
