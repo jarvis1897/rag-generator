@@ -1,4 +1,5 @@
-# Eval set over pg18-images-3.pdf (The Federalist Papers)
+# Eval set over eval/pg18_docs/pg18-images-3.pdf (The Federalist Papers)
+# Run: python eval/run_eval.py --questions eval/pg18_questions.yaml --docs eval/pg18_docs --out eval/results/pg18.json
 #
 # Fields:
 #   question         the user question

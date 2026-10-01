@@ -136,13 +136,20 @@ These are enforced in [app/rag.py](app/rag.py) and covered by tests:
 
 ## Evaluation
 
-[eval/run_eval.py](eval/run_eval.py) runs [eval/questions.yaml](eval/questions.yaml)
-(12 answerable and 3 unanswerable questions) against a running API, using sample
-docs for a fictional company so the model can't answer from memory.
+[eval/run_eval.py](eval/run_eval.py) runs a question set against a running API. It
+uploads every file in the `--docs` folder into a fresh collection, so each eval set
+keeps its documents in its own folder:
+
+| Question set | Documents | What it tests |
+|---|---|---|
+| [eval/questions.yaml](eval/questions.yaml) (default) | `eval/sample_docs/` | 12 answerable and 3 unanswerable questions over docs for a fictional company, so the model can't answer from memory |
+| [eval/pg18_questions.yaml](eval/pg18_questions.yaml) | `eval/pg18_docs/` | 6 answerable and 3 unanswerable questions over *The Federalist Papers* (456-page PDF, about 780 chunks): page-level retrieval in a long document |
 
 ```bash
-python eval/run_eval.py                 # builds a fresh collection from eval/sample_docs
+python eval/run_eval.py                 # default set: builds a fresh collection from eval/sample_docs
 python eval/run_eval.py --no-judge      # skip the LLM-as-judge step
+python eval/run_eval.py --questions eval/pg18_questions.yaml --docs eval/pg18_docs --out eval/results/pg18.json
+python eval/run_eval.py --collection-id <id> ...   # reuse an already-ingested collection
 ```
 
 It reports:
@@ -154,7 +161,7 @@ It reports:
 - **MRR:** mean reciprocal rank of the expected source among those sources
 - **Expected facts:** key strings (such as "45" days) appear in the answer
 
-Detailed per-question results are written to `eval/results/latest.json`.
+Detailed per-question results are written to `eval/results/latest.json` (or `--out`).
 
 ## Design trade-offs
 

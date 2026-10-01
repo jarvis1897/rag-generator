@@ -40,28 +40,42 @@ Question ──> Embed query (same model) ──> Retrieve top-k ─┘
 
 Ingestion and query must use the same embedding model. Store the model name in the collection metadata and reject queries if the configured model doesn't match.
 
-## Suggested layout
+## Layout
 
 ```
 app/
-  main.py            # FastAPI app and routes
-  config.py          # Settings (pydantic-settings)
+  main.py            # FastAPI app, routes, and wiring (build_state)
+  config.py          # Settings (plain model, all defaults) + Secrets (API keys from env/.env)
+  errors.py          # ProviderError for embedding/reranking provider failures
   ingest/
     parsers.py       # Extension-based dispatcher; returns text with page numbers
     chunker.py       # Recursive splitter with overlap
+    pipeline.py      # Hash, dedupe, parse, chunk, embed, store one file (with progress callback)
+  embeddings.py      # Embedder interface + local embedders (bge-m3, MiniLM) and factory
+  voyage.py          # Voyage AI embedder and reranker (the defaults)
+  reranker.py        # Reranker interface, local ONNX cross-encoder, and factory
+  hf.py              # Hugging Face model downloads for the local models
   store.py           # Chroma client wrapper: collections, add, query
-  rag.py             # Retrieve, threshold, prompt, generate
+  retrieval.py       # Dense and hybrid (BM25 + RRF) retrievers
+  rag.py             # Rewrite, retrieve, threshold, rerank, prompt, generate
   llm.py             # Thin LLM client wrapper (provider set via config)
+  jobs.py            # In-memory ingestion job registry with progress and ETA
   schemas.py         # Pydantic request/response models
 ui/
-  streamlit_app.py
+  streamlit_app.py   # Talks to the API over HTTP only
 eval/
-  questions.yaml     # 10-15 question/answer pairs over a sample doc set
-  run_eval.py
-tests/
-docker-compose.yml
+  run_eval.py        # Runs a question set: --questions, --docs, --collection-id, --out
+  questions.yaml     # Default set over sample_docs/ (fictional company)
+  sample_docs/       # Documents for questions.yaml only
+  pg18_questions.yaml  # Federalist Papers set over pg18_docs/
+  pg18_docs/         # Documents for pg18_questions.yaml only
+  make_sample_pdf.py # Regenerates sample_docs/employee_handbook.pdf
+tests/               # pytest; fakes for the embedder, LLM, reranker and Voyage client
+Dockerfile.api, Dockerfile.ui, docker-compose.yml
 README.md
 ```
+
+Each eval set keeps its documents in its own folder, because run_eval.py uploads every file in `--docs`. Never add documents for one set to another set's folder.
 
 ## API
 
