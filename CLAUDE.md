@@ -142,6 +142,22 @@ All three are done:
 - Streaming responses end to end (`/query/stream`, used by the UI)
 - Docker Compose for both services (verified end to end)
 
+## Future work: graph knowledge store and retrieval
+
+Not started. The next major feature, for relational and multi-step questions that chunk retrieval handles poorly: "Which papers by Madison cite the Swiss confederacy?", "Who is bound by the clause that section 4 refers to?", "Compare how No. 10 and No. 51 treat faction." Their answer is spread across chunks that share no wording with the question, so dense, BM25 and reranking all miss some of the pieces.
+
+Goal: alongside each Chroma collection, build a knowledge graph of entities (people, organizations, documents and sections, defined terms, dates, amounts) and the relations between them, and use it to pull in the related chunks a question needs before generation.
+
+Design constraints, so it fits the rest of the system:
+
+- **Scoped per collection.** One graph per document set, created and deleted with its Chroma collection. Never traverse across collections.
+- **Every node and edge points back to source chunks** (`doc_id`, `chunk_index`, `filename`, `page`). The LLM still answers only from chunk text, never from bare graph facts, so the citation rules (`[filename p.N]`) and grounding rules 1 to 5 stay unchanged.
+- **Retrieval stays deterministic, not an agent loop.** Find entities in the (standalone) question, expand a bounded number of hops in the graph (setting, e.g. `graph_max_hops = 2`), collect the linked chunks, and merge them with the hybrid candidates (RRF) before the threshold check and reranking. No tool calling, no model-driven multi-turn search; that remains out of scope.
+- **The threshold keeps its meaning.** Graph-sourced chunks get their dense cosine score, like BM25-only hits do today, so `min_relevance_score` still gates the LLM call.
+- **Extraction runs at ingestion, in the background job**, batched (never one LLM call per chunk), reported through the existing job progress, and deduplicated by `content_hash` like everything else. Entity resolution (merging "Madison", "James Madison", "Publius") is the hard part; record which method and model built the graph in the collection metadata, as with embeddings, and reject mismatches.
+- **Behind a small interface with a config switch** (e.g. `graph_mode: Literal["off", "on"]` in `app/config.py`, default `"off"`), so the plain pipeline keeps working and the graph can be compared against it. Pick a store that is simple to run locally and in Docker Compose (an embedded graph or plain tables first; add a server like Neo4j only if the eval shows the need).
+- **Measure before and after.** Add a multi-hop question set to `eval/` (its own `*_questions.yaml` and docs folder) whose answers need two or more chunks, and report context recall and faithfulness with the graph on and off. Ship it only if it beats the hybrid + rerank baseline without hurting the existing sets.
+
 ## Conventions
 
 - Type hints everywhere. Pydantic models for all request and response bodies.
