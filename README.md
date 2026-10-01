@@ -12,11 +12,12 @@ document set without code changes.
 ```
 Upload ──> Parse ──> Chunk (+ metadata) ──> Embed ──> Chroma collection
                                                           │
-Question ──> Rewrite follow-ups ──> Embed ──> Retrieve top-k ┘
+Question ──> Rewrite follow-ups ──> Embed ──> Retrieve 15 candidates ┘
                                                 │
                        best score < threshold? ─┴─ yes ──> "not found" (no LLM call)
                                                 │ no
-                                  numbered context ──> LLM ──> answer + [file p.N] citations
+                         cross-encoder rerank ──> top 5 ──> numbered context ──> LLM
+                                                              ──> answer + [file p.N] citations
 ```
 
 ## Quick start
@@ -38,7 +39,8 @@ uvicorn app.main:app --reload                 # http://localhost:8000/docs
 streamlit run ui/streamlit_app.py             # http://localhost:8501
 ```
 
-The first ingestion downloads the ONNX embedding model (about 80 MB) into `~/.cache/chroma`.
+The first ingestion downloads the ONNX embedding model (about 80 MB) into `~/.cache/chroma`,
+and the first startup downloads the reranker (about 90 MB) into `~/.cache/huggingface`.
 
 ### Docker Compose
 
@@ -94,7 +96,9 @@ Everything comes from environment variables or `.env` (see [.env.example](.env.e
 | `LLM_MODEL` | `claude-opus-5` | |
 | `LLM_REFUSAL_FALLBACK` | `true` | Server-side fallback if the model declines; disable on platforms that reject it |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `250` / `40` | Approximate tokens; see trade-offs below |
-| `TOP_K` | `5` | Chunks retrieved per question |
+| `TOP_K` | `5` | Chunks sent to the LLM per question |
+| `RETRIEVAL_CANDIDATES` | `15` | Chunks retrieved for the reranker to choose from (must be at least `TOP_K`) |
+| `RERANKER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | ONNX cross-encoder from Hugging Face. Empty disables reranking (then `TOP_K` are retrieved directly) |
 | `MIN_RELEVANCE_SCORE` | `0.25` | Cosine similarity; below this the app refuses without calling the LLM |
 | `RETRIEVAL_MODE` | `dense` | `hybrid` adds BM25 with reciprocal rank fusion |
 | `CHROMA_PERSIST_DIR` | (unset) | Unset means in-memory Chroma |
@@ -133,6 +137,8 @@ It reports:
 - **Retrieval hit rate:** the expected file (and page, where given) is in the top-k
 - **Faithfulness:** LLM-as-judge on whether each grounded answer is supported by the retrieved context
 - **Refusal correctness:** unanswerable questions come back `grounded: false`
+- **Context recall:** the answer's key facts appear in the sources sent to the LLM (missed ground truth shows up here)
+- **MRR:** mean reciprocal rank of the expected source among those sources
 - **Expected facts:** key strings (such as "45" days) appear in the answer
 
 Detailed per-question results are written to `eval/results/latest.json`.
@@ -180,6 +186,20 @@ embedding models blur together. RRF only picks and orders the chunks: each retur
 chunk keeps its dense cosine score, so the threshold means the same thing in both
 modes. On the small eval set both modes hit 12/12, so dense stays the default.
 
+**Reranking.** The embedding model scores question and passage separately, so it
+can rank a passage that merely shares vocabulary above the one that answers the
+question, or push the answer below the top 5. Retrieving 15 candidates and letting a
+cross-encoder pick the best 5 widens the net for recall while keeping the prompt
+short. The cross-encoder reads question and passage together, which is more
+accurate but too slow to run over a whole collection. It adds about 0.2 s per query
+on CPU and about 90 MB of model. The threshold still uses dense cosine over all 15
+candidates, because cross-encoder scores are unbounded logits with no stable cutoff.
+Sources carry both `score` (cosine) and `rerank_score`. On the sample set, chunk-level
+recall@5 was already 20/20 without reranking (the corpus is only 8 to 12 chunks), but
+reranking moved the answer chunk higher: MRR went from 0.93 to 0.97 with dense
+retrieval. Expect the recall gain on larger collections, where the answer can rank
+below 5th. Measure it with `run_eval.py`'s context recall on your own documents.
+
 **Embeddings run locally.** The ONNX MiniLM model needs no API key or PyTorch and is
 fast on CPU, but its quality is modest. The embedder sits behind a small interface
 ([app/embeddings.py](app/embeddings.py)), and the collection records which model
@@ -200,6 +220,7 @@ app/
   embeddings.py      Embedding wrapper
   store.py           Chroma wrapper: collections, add, query
   retrieval.py       Dense and hybrid (BM25 + RRF) retrievers
+  reranker.py        ONNX cross-encoder reranker
   rag.py             Rewrite, retrieve, threshold, prompt, generate
   llm.py             LLM wrapper (Anthropic)
   jobs.py            In-memory ingestion job registry
@@ -216,6 +237,6 @@ pytest
 
 The tests use a deterministic fake embedder and a fake LLM, so they run offline in
 a couple of seconds. They cover the parser dispatcher, the chunker, the threshold
-refusal path (asserting the LLM is never called), collection isolation (store and
+refusal path (asserting the LLM is never called), reranking (candidates in, top-k out), collection isolation (store and
 API level), dedup, embedding batching, the embedding-model mismatch check, hybrid
 retrieval, and the HTTP endpoints including streaming.
