@@ -3,6 +3,7 @@
 import logging
 import time
 
+from app.embeddings import ProgressCallback
 from app.ingest.chunker import chunk_pages
 from app.ingest.parsers import parse_file
 from app.schemas import FileResult
@@ -18,7 +19,9 @@ def ingest_file(
     data: bytes,
     chunk_size: int,
     chunk_overlap: int,
+    on_progress: ProgressCallback | None = None,
 ) -> FileResult:
+    """`on_progress(done, total)` is called once chunking is done (0, total) and after each embedding batch."""
     start = time.perf_counter()
     content_hash = sha256_hex(data)
     if store.has_document(collection_id, content_hash):
@@ -27,7 +30,9 @@ def ingest_file(
 
     pages = parse_file(filename, data)
     chunks = chunk_pages(pages, chunk_size, chunk_overlap)
-    added = store.add_chunks(collection_id, filename, content_hash, chunks)
+    if on_progress:
+        on_progress(0, len(chunks))
+    added = store.add_chunks(collection_id, filename, content_hash, chunks, on_progress)
     logger.info(
         "ingested %s into %s: %d pages, %d chunks in %.2fs",
         filename,

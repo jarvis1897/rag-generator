@@ -2,7 +2,6 @@
 
 import json
 import os
-import time
 from collections.abc import Iterator
 
 import requests
@@ -71,12 +70,78 @@ def render_assistant(msg: dict) -> None:
     render_sources(msg.get("sources", []))
 
 
+def format_duration(seconds: float) -> str:
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+FILE_ICONS = {"pending": "⏳", "parsing": "📄", "embedding": "🧮", "ingested": "✅", "skipped": "↩️", "failed": "⚠️"}
+
+
+def render_job(job: dict) -> None:
+    active = job["status"] in ("pending", "running")
+    n_files = len(job["files"])
+    finished = sum(f["status"] in ("ingested", "skipped", "failed") for f in job["files"])
+    if active:
+        text = f"{job['progress']:.0%} · {finished}/{n_files} files"
+        if job["eta_seconds"] is not None:
+            text += f" · ~{format_duration(job['eta_seconds'])} left"
+        else:
+            text += " · estimating time…"
+        st.progress(job["progress"], text=text)
+    else:
+        icon = "✅" if job["status"] == "done" else "⚠️"
+        st.markdown(f"{icon} {n_files} file(s) {job['status']} in {format_duration(job['elapsed_seconds'])}")
+
+    with st.expander("Files", expanded=active):
+        for f in job["files"]:
+            line = f"{FILE_ICONS[f['status']]} `{f['filename']}`: {f['status']}"
+            if f["status"] == "embedding" and f["chunks"]:
+                line += f" {f['chunks_done']}/{f['chunks']} chunks"
+                st.markdown(line)
+                st.progress(f["chunks_done"] / f["chunks"])
+                continue
+            if f["chunks"]:
+                line += f" ({f['chunks']} chunks)"
+            if f["error"]:
+                line += f" · {f['error']}"
+            st.markdown(line)
+
+
+@st.fragment(run_every=1.5)
+def job_panel() -> None:
+    """Refreshes on its own every 1.5 s without rerunning the chat."""
+    any_active = False
+    for job_id in st.session_state.jobs[:5]:
+        resp = api("GET", f"/jobs/{job_id}")
+        if not resp.ok:
+            continue
+        job = resp.json()
+        active = job["status"] in ("pending", "running")
+        any_active |= active
+        render_job(job)
+        if not active and job_id not in st.session_state.finished_jobs:
+            # A job just finished: rerun the whole app once so document counts update.
+            st.session_state.finished_jobs.add(job_id)
+            st.rerun(scope="app")
+    if not any_active:
+        st.caption("No ingestion running.")
+
+
 # --- sidebar: collections, uploads, job status ---
 
 if "messages" not in st.session_state:
     st.session_state.messages = {}  # collection_id -> list of chat messages
 if "jobs" not in st.session_state:
     st.session_state.jobs = []  # job ids started in this session
+if "finished_jobs" not in st.session_state:
+    st.session_state.finished_jobs = set()  # jobs whose completion already triggered a refresh
 
 with st.sidebar:
     st.header("Document sets")
@@ -128,25 +193,7 @@ with st.sidebar:
 
     if st.session_state.jobs:
         st.subheader("Ingestion jobs")
-        running = False
-        for job_id in st.session_state.jobs[:5]:
-            resp = api("GET", f"/jobs/{job_id}")
-            if not resp.ok:
-                continue
-            job = resp.json()
-            running |= job["status"] in ("pending", "running")
-            icon = {"pending": "⏳", "running": "⚙️", "done": "✅", "failed": "⚠️"}[job["status"]]
-            with st.expander(f"{icon} {len(job['files'])} file(s), {job['status']}", expanded=running):
-                for f in job["files"]:
-                    line = f"`{f['filename']}`: {f['status']}"
-                    if f["chunks"]:
-                        line += f" ({f['chunks']} chunks)"
-                    if f["error"]:
-                        line += f" · {f['error']}"
-                    st.markdown(line)
-        if running:
-            time.sleep(1.5)
-            st.rerun()
+        job_panel()
 
 
 # --- main area: chat ---

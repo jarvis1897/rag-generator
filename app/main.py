@@ -115,9 +115,20 @@ def _run_ingestion(st: AppState, job_id: str, collection_id: str, files: list[tu
     st.jobs.set_status(job_id, JobStatus.running)
     any_failed = False
     for i, (filename, data) in enumerate(files):
+        st.jobs.set_file_stage(job_id, i, "parsing")
+
+        def report(done: int, total: int, i: int = i) -> None:
+            st.jobs.set_file_stage(job_id, i, "embedding", chunks_done=done, chunks=total)
+
         try:
             result = ingest_file(
-                st.store, collection_id, filename, data, st.settings.chunk_size, st.settings.chunk_overlap
+                st.store,
+                collection_id,
+                filename,
+                data,
+                st.settings.chunk_size,
+                st.settings.chunk_overlap,
+                on_progress=report,
             )
         except Exception as exc:  # one bad file must not stop the rest
             logger.exception("ingestion failed for %s", filename)
@@ -154,7 +165,7 @@ async def upload_documents(
             )
         payload.append((filename, data))
 
-    job_id = st.jobs.create(collection_id, [name for name, _ in payload])
+    job_id = st.jobs.create(collection_id, [(name, len(data)) for name, data in payload])
     background.add_task(_run_ingestion, st, job_id, collection_id, payload)
     return JobCreated(job_id=job_id)
 

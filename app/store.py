@@ -16,7 +16,7 @@ import chromadb
 from chromadb.api import ClientAPI
 from chromadb.api.models.Collection import Collection
 
-from app.embeddings import Embedder, embed_in_batches
+from app.embeddings import Embedder, ProgressCallback, embed_in_batches
 from app.ingest.chunker import Chunk
 
 logger = logging.getLogger(__name__)
@@ -143,13 +143,20 @@ class DocumentStore:
         found = col.get(where={"content_hash": content_hash}, limit=1, include=[])
         return bool(found["ids"])
 
-    def add_chunks(self, collection_id: str, filename: str, content_hash: str, chunks: list[Chunk]) -> int:
+    def add_chunks(
+        self,
+        collection_id: str,
+        filename: str,
+        content_hash: str,
+        chunks: list[Chunk],
+        on_progress: ProgressCallback | None = None,
+    ) -> int:
         """Embed and store chunks for one document. Returns the number of chunks added."""
         if not chunks:
             return 0
         col = self._checked(collection_id)
         doc_id = content_hash[:16]
-        vectors = embed_in_batches(self._embedder, [c.text for c in chunks], self._batch_size)
+        vectors = embed_in_batches(self._embedder, [c.text for c in chunks], self._batch_size, on_progress)
         col.add(
             ids=[chunk_id(doc_id, c.chunk_index) for c in chunks],
             embeddings=vectors,

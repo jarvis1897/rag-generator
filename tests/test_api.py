@@ -39,6 +39,9 @@ def test_full_flow(client: TestClient) -> None:
     job = client.get(f"/jobs/{resp.json()['job_id']}").json()
     assert job["status"] == "done"
     assert job["files"][0]["status"] == "ingested"
+    assert job["progress"] == 1.0 and job["eta_seconds"] is None
+    assert job["files"][0]["chunks_done"] == job["files"][0]["chunks"] > 0
+    assert job["files"][0]["size_bytes"] == len(CATS)
 
     [info] = client.get("/collections").json()
     assert info["name"] == "Pets" and info["document_count"] == 1

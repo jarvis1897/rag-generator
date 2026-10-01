@@ -32,8 +32,10 @@ class JobStatus(str, Enum):
 
 class FileResult(BaseModel):
     filename: str
-    status: Literal["pending", "ingested", "skipped", "failed"]
-    chunks: int = 0
+    status: Literal["pending", "parsing", "embedding", "ingested", "skipped", "failed"]
+    chunks: int = 0  # chunks stored (final), or total chunks to embed while embedding
+    chunks_done: int = 0  # chunks embedded so far
+    size_bytes: int = 0
     error: str | None = None
 
 
@@ -42,6 +44,9 @@ class JobInfo(BaseModel):
     collection_id: str
     status: JobStatus
     files: list[FileResult]
+    progress: float = 0.0  # 0..1, weighted by file size
+    elapsed_seconds: float = 0.0
+    eta_seconds: float | None = None  # None until there is enough progress to estimate
 
 
 class JobCreated(BaseModel):

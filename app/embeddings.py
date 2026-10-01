@@ -8,6 +8,7 @@
 
 import logging
 import time
+from collections.abc import Callable
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
@@ -100,12 +101,19 @@ def create_embedder(model_name: str, cache_dir: str = "~/.cache/rag-generator/mo
     return SentenceTransformerEmbedder(model_name)
 
 
-def embed_in_batches(embedder: Embedder, texts: list[str], batch_size: int) -> list[list[float]]:
+ProgressCallback = Callable[[int, int], None]  # (done, total)
+
+
+def embed_in_batches(
+    embedder: Embedder, texts: list[str], batch_size: int, on_progress: ProgressCallback | None = None
+) -> list[list[float]]:
     """Embed `texts` in batches of `batch_size` (never one request per chunk)."""
     start = time.perf_counter()
     vectors: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         vectors.extend(embedder.embed(texts[i : i + batch_size]))
+        if on_progress:
+            on_progress(len(vectors), len(texts))
     logger.info(
         "embedded %d texts in %d batch(es) in %.2fs",
         len(texts),

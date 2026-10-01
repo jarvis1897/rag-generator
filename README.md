@@ -56,8 +56,10 @@ persists in the `chroma_data` volume and the models in `model_cache`.
 ## Using it
 
 1. In the sidebar, create a document set and upload files.
-2. Watch the ingestion job until every file shows `ingested` (or `skipped` for
-   duplicates, `failed` with a reason).
+2. Watch the ingestion progress bar in the sidebar. It shows overall progress, an
+   estimated time remaining, and per-file chunk counts, and refreshes on its own
+   without interrupting the chat. Each file ends as `ingested`, `skipped` (duplicate)
+   or `failed` with a reason.
 3. Ask questions. Answers stream in, cite sources as `[filename p.N]`, and list the
    retrieved passages in a **Sources** expander. If the documents don't contain the
    answer, the reply is shown as a "Not found in the documents" warning, not as a
@@ -70,7 +72,7 @@ persists in the `chroma_data` volume and the models in `model_cache`.
 | `POST` | `/collections` | Create a document set: `{"name": "..."}` returns `collection_id` |
 | `GET` | `/collections` | List sets with document and chunk counts |
 | `POST` | `/collections/{id}/documents` | Multipart upload (`files`, repeatable). Returns `job_id` (202) |
-| `GET` | `/jobs/{job_id}` | `pending` / `running` / `done` / `failed`, with per-file results |
+| `GET` | `/jobs/{job_id}` | `pending` / `running` / `done` / `failed`, overall `progress` (0 to 1), `elapsed_seconds`, `eta_seconds`, and per-file status and `chunks_done`/`chunks` |
 | `POST` | `/collections/{id}/query` | `{question, history?}` returns `{answer, sources[], grounded, standalone_question}` |
 | `POST` | `/collections/{id}/query/stream` | Same, as NDJSON events: `sources`, `token`..., `done` (or `error`) |
 
@@ -227,6 +229,13 @@ recall@5 was already 20/20 without reranking (the corpus is only 8 to 12 chunks)
 reranking moved the answer chunk higher: MRR went from 0.93 to 0.97 with dense
 retrieval. Expect the recall gain on larger collections, where the answer can rank
 below 5th. Measure it with `run_eval.py`'s context recall on your own documents.
+
+**Ingestion progress.** Nearly all ingestion time is embedding, so progress is
+reported after each embedding batch. A file's chunk count isn't known until it is
+parsed, so overall progress weights files by size in bytes. The time remaining is a
+linear extrapolation from elapsed time, which holds up because embedding speed is
+roughly constant per chunk. It is hidden for the first 2% because early estimates
+are noise. Embedding a 157-chunk contract with bge-m3 took about 70 s on CPU.
 
 **Embeddings run locally.** bge-m3 runs through ONNX Runtime with no PyTorch and no API
 key, so document text never leaves the machine, which matters for confidential legal
