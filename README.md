@@ -4,8 +4,9 @@ Upload documents at runtime, build a retrieval index over them, and ask question
 that get answered only from those documents, with inline citations. Works with any
 document set without code changes.
 
-- **Backend:** FastAPI, Chroma (one collection per document set), local `BAAI/bge-m3`
-  embeddings (8192-token window, 1024 dims), a cross-encoder reranker, Claude for generation
+- **Backend:** FastAPI, Chroma (one collection per document set), Voyage AI
+  `voyage-4-large` embeddings (2048 dims) and `rerank-2.5` reranking, Claude for generation.
+  Local models (bge-m3, an ONNX cross-encoder) remain available as alternatives.
 - **Frontend:** Streamlit, talking to the backend over HTTP only
 - **Formats:** PDF (with page numbers), DOCX, TXT, MD
 
@@ -22,14 +23,14 @@ Question ──> Rewrite follow-ups ──> Embed ──> Retrieve 15 candidates
 
 ## Quick start
 
-Requires Python 3.11+ and an Anthropic API key.
+Requires Python 3.11+, an Anthropic API key, and a Voyage AI API key (https://dash.voyageai.com).
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 
-cp .env.example .env               # then set ANTHROPIC_API_KEY (the only thing .env holds)
+cp .env.example .env               # then set ANTHROPIC_API_KEY and VOYAGE_API_KEY (secrets only)
 ```
 
 Run the API and the UI in two terminals:
@@ -39,14 +40,13 @@ uvicorn app.main:app --reload                 # http://localhost:8000/docs
 streamlit run ui/streamlit_app.py             # http://localhost:8501
 ```
 
-The first startup downloads the embedding model (bge-m3, about 2.3 GB) and the reranker
-(about 90 MB) into `~/.cache/rag-generator/models`, so it takes a few minutes once. Later
-starts load them in about 5 seconds.
+With the default Voyage models nothing is downloaded. If you switch to the local models,
+the first startup downloads them into `~/.cache/rag-generator/models` (bge-m3 is about 2.3 GB).
 
 ### Docker Compose
 
 ```bash
-cp .env.example .env               # set ANTHROPIC_API_KEY
+cp .env.example .env               # set ANTHROPIC_API_KEY and VOYAGE_API_KEY
 docker compose up --build
 ```
 
@@ -94,20 +94,21 @@ Each value has exactly one home, so nothing can be set in two places that disagr
 - **Settings** live only in [app/config.py](app/config.py), as defaults in the `Settings`
   class. Edit that file to change them. They are not read from environment variables or
   `.env`; if a setting name appears there, it is ignored and a warning is logged at startup.
-- **Secrets** (`ANTHROPIC_API_KEY`) live only in `.env` or the environment, never in code
-  or logs. If unset, the Anthropic SDK falls back to `ANTHROPIC_AUTH_TOKEN` or an
+- **Secrets** (`ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`) live only in `.env` or the
+  environment, never in code or logs. If unset, the Anthropic SDK falls back to `ANTHROPIC_AUTH_TOKEN` or an
   `ant auth login` profile.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `embedding_model` | `BAAI/bge-m3` | Also `all-MiniLM-L6-v2`; any other name loads via `sentence-transformers` (install separately). Changing it requires re-ingesting |
-| `embedding_batch_size` | `8` | Chunks per embedding call; small because chunks are long |
+| `embedding_model` | `voyage-4-large` | Any `voyage-*` model, or local `BAAI/bge-m3` / `all-MiniLM-L6-v2`; other names load via `sentence-transformers`. Changing it requires re-ingesting |
+| `embedding_dimensions` | `2048` | Voyage only: 256, 512, 1024 or 2048. Changing it requires re-ingesting |
+| `embedding_batch_size` | `None` | Chunks per embedding call; `None` uses the embedder's default (256 for Voyage, 8 for bge-m3) |
 | `llm_provider` / `llm_model` | `anthropic` / `claude-opus-5` | Only Anthropic is implemented; see `app/llm.py` to add one |
 | `llm_refusal_fallback` | `True` | Server-side fallback if the model declines; disable on platforms that reject it |
 | `chunk_size` / `chunk_overlap` | `512` / `80` | Approximate tokens; see trade-offs below |
 | `top_k` | `5` | Chunks sent to the LLM per question |
 | `retrieval_candidates` | `15` | Chunks retrieved for the reranker to choose from (at least `top_k`) |
-| `reranker_model` | `Xenova/ms-marco-MiniLM-L-6-v2` | ONNX cross-encoder; `None` disables reranking |
+| `reranker_model` | `rerank-2.5` | Voyage reranker (32k-token input), `rerank-2.5-lite`, or a local ONNX cross-encoder such as `Xenova/ms-marco-MiniLM-L-6-v2`; `None` disables reranking |
 | `min_relevance_score` | `0.42` | Cosine similarity; below this the app refuses without calling the LLM. Calibrated for bge-m3 |
 | `retrieval_mode` | `hybrid` | BM25 + dense with reciprocal rank fusion; `dense` uses embeddings only |
 | `chroma_persist_dir` | `./chroma_data` | `None` means in-memory Chroma |
@@ -164,32 +165,34 @@ loses all collections. To clear the index, stop the API and delete `chroma_data`
 restart and doesn't work across multiple API workers. A real deployment would move
 jobs to Redis or a database table.
 
-**Embedding model and chunk sizing.** The first version used `all-MiniLM-L6-v2`, which
-reads only 256 word-pieces and silently drops the rest. That capped chunks at about 250
-tokens: at 800, a fact at the end of a chunk was never embedded (an eval question about
-the Ember stove scored 0.065 for that reason). That is too small for legal and similar
-documents, where a clause and its conditions, exceptions and defined terms need to stay
-in one chunk. The default is now `BAAI/bge-m3`:
+**Embedding model and chunk sizing.** The embedding model went through three versions:
 
-| | all-MiniLM-L6-v2 | BAAI/bge-m3 |
-|---|---|---|
-| Input window | 256 tokens | 8192 tokens |
-| Vector size | 384 | 1024 |
-| Download | about 80 MB | about 2.3 GB |
-| Chunk-level recall@5 / MRR (20 eval + paraphrased questions) | 20/20 / 0.94 | 20/20 / 1.00 |
+| | all-MiniLM-L6-v2 | BAAI/bge-m3 | voyage-4-large (current) |
+|---|---|---|---|
+| Runs | Locally | Locally | Voyage API |
+| Input window | 256 tokens | 8192 tokens | 32,000 tokens |
+| Vector size | 384 | 1024 | 2048 (configurable) |
+| Ingestion speed on this laptop's CPU | Fast | About 1.5 s per chunk (781 chunks: 19 min) | Seconds per document |
 
-Chunks are 512 tokens with 80 overlap. bge-m3 could take far more, but the reranker
-reads at most 512 tokens of question plus passage, so larger chunks would be partly
-invisible to it. Larger chunks also make citations less precise. To go bigger, swap in
-a long-context reranker (such as `BAAI/bge-reranker-v2-m3`) first. The app logs a warning
-at startup if `chunk_size` exceeds the embedding model's window. Sizes are estimated
-at 4 characters per token rather than with a tokenizer; the estimate only needs to be
-roughly right. The cost is speed: bge-m3 is a 568M-parameter model, so ingestion on
-CPU is much slower than with MiniLM (a long contract can take minutes). Queries embed
-one short question and stay fast.
+MiniLM's 256-token window capped chunks at about 250 tokens, too small for legal text
+where a clause and its conditions, exceptions and defined terms need to stay together.
+bge-m3 fixed that and retrieved better (MRR 1.00 vs 0.94 on the eval questions), but at
+about 1.5 s per chunk on CPU it made ingestion far too slow. Quantizing it to int8 only
+gained about 20%, and GPU inference couldn't be verified. voyage-4-large runs remotely,
+so ingestion takes seconds, and it is Voyage's best general retrieval model. Vectors are
+2048-dimensional, the largest it offers: about twice the storage of 1024, for a small
+quality gain.
 
-**Threshold choice.** `min_relevance_score = 0.42` comes from best-chunk cosine scores
-on the sample docs with bge-m3 at 512-token chunks:
+Chunks are 512 tokens with 80 overlap. With Voyage embeddings and reranking, both read
+32k tokens, so chunks could be larger; the trade-off is less precise citations and
+more text per prompt. The local ONNX reranker reads only 512 tokens, so keep chunks at
+512 if you switch back to it. The app logs a warning at startup if `chunk_size`
+exceeds the embedding model's window. Sizes are estimated at 4 characters per token
+rather than with a tokenizer; the estimate only needs to be roughly right.
+
+**Threshold choice.** *The value below was calibrated for bge-m3 and still needs
+re-checking for voyage-4-large.* `min_relevance_score = 0.42` comes from best-chunk
+cosine scores on the sample docs with bge-m3 at 512-token chunks:
 
 | Question type | Best-chunk score |
 |---|---|
@@ -221,9 +224,12 @@ can rank a passage that merely shares vocabulary above the one that answers the
 question, or push the answer below the top 5. Retrieving 15 candidates and letting a
 cross-encoder pick the best 5 widens the net for recall while keeping the prompt
 short. The cross-encoder reads question and passage together, which is more
-accurate but too slow to run over a whole collection. It adds about 0.2 s per query
-on CPU and about 90 MB of model. The threshold still uses dense cosine over all 15
-candidates, because cross-encoder scores are unbounded logits with no stable cutoff.
+accurate but too slow to run over a whole collection. The default is Voyage's
+`rerank-2.5`, which reads up to 32k tokens of query plus passage, so long chunks are
+scored in full. The local ONNX alternative adds about 0.2 s per query on CPU but reads
+only 512 tokens. The threshold still uses dense cosine over all 15 candidates, so it
+means the same thing whichever reranker runs (local cross-encoder scores are
+unbounded logits with no stable cutoff anyway).
 Sources carry both `score` (cosine) and `rerank_score`. On the sample set, chunk-level
 recall@5 was already 20/20 without reranking (the corpus is only 8 to 12 chunks), but
 reranking moved the answer chunk higher: MRR went from 0.93 to 0.97 with dense
@@ -235,15 +241,23 @@ reported after each embedding batch. A file's chunk count isn't known until it i
 parsed, so overall progress weights files by size in bytes. The time remaining is a
 linear extrapolation from elapsed time, which holds up because embedding speed is
 roughly constant per chunk. It is hidden for the first 2% because early estimates
-are noise. Embedding a 157-chunk contract with bge-m3 took about 70 s on CPU.
+are noise. Embedding a 157-chunk contract with bge-m3 took about 70 s on CPU. With Voyage,
+progress advances in steps of 256 chunks per request batch.
 
-**Embeddings run locally.** bge-m3 runs through ONNX Runtime with no PyTorch and no API
-key, so document text never leaves the machine, which matters for confidential legal
-material. A hosted legal model such as Voyage's `voyage-law-2` might retrieve better, at
-a per-token cost and with documents sent to a third party. The embedder sits behind a
-small interface ([app/embeddings.py](app/embeddings.py)), and each collection records
-which model built it. Querying with a different `embedding_model` returns 409 instead
-of silently giving bad results.
+**Hosted vs local models.** Voyage (Anthropic's recommended embeddings provider;
+Anthropic has no embedding model of its own) makes ingestion fast and needs no local
+compute, but document text and questions are sent to Voyage's servers, it needs
+internet access and a `VOYAGE_API_KEY`, and each question adds an embedding call and
+a rerank call. It is paid per token, with free allowances (200M tokens for
+voyage-4-large and rerank-2.5 at the time of writing); a 781-chunk document is about
+400k tokens. Add a payment method to the Voyage account, because the limits without
+one can throttle large ingests. For confidential material that must not leave the
+machine, set `embedding_model = "BAAI/bge-m3"` and
+`reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"` (and `embedding_dimensions = None`).
+Both kinds of model sit behind small interfaces ([app/embeddings.py](app/embeddings.py),
+[app/reranker.py](app/reranker.py), [app/voyage.py](app/voyage.py)). Each collection
+records which model and vector size built it, and querying with a different
+configuration returns 409 instead of silently giving bad results.
 
 ## Project layout
 
@@ -259,7 +273,9 @@ app/
   embeddings.py      Embedding wrapper
   store.py           Chroma wrapper: collections, add, query
   retrieval.py       Dense and hybrid (BM25 + RRF) retrievers
-  reranker.py        ONNX cross-encoder reranker
+  reranker.py        Reranker factory and local ONNX cross-encoder
+  voyage.py          Voyage AI embeddings and reranking
+  errors.py          Provider error type
   hf.py              Model downloads from the Hugging Face Hub
   rag.py             Rewrite, retrieve, threshold, prompt, generate
   llm.py             LLM wrapper (Anthropic)
@@ -277,6 +293,6 @@ pytest
 
 The tests use a deterministic fake embedder and a fake LLM, so they run offline in
 a couple of seconds. They cover the parser dispatcher, the chunker, the threshold
-refusal path (asserting the LLM is never called), reranking (candidates in, top-k out), collection isolation (store and
+refusal path (asserting the LLM is never called), reranking (candidates in, top-k out), the Voyage clients (against a fake client: input types, request splitting, error mapping), collection isolation (store and
 API level), dedup, embedding batching, the embedding-model mismatch check, hybrid
 retrieval, and the HTTP endpoints including streaming.

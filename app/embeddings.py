@@ -1,7 +1,9 @@
 """Thin embedding client wrapper so the model can be swapped by config.
 
-- "BAAI/bge-m3" (default): ONNX export run with ONNX Runtime (no PyTorch needed).
+- "voyage-*" (default "voyage-4-large"): Voyage AI's hosted API, see app/voyage.py.
+- "BAAI/bge-m3": local ONNX export run with ONNX Runtime (no PyTorch needed).
   8192-token window, 1024-dim vectors. About 2.3 GB, downloaded on first use.
+  Slow on CPU (about 1.5 s per 512-token chunk).
 - "all-MiniLM-L6-v2": Chroma's bundled ONNX build. 256-token window, 384 dims.
 - Any other name is loaded with sentence-transformers, which must be installed.
 """
@@ -15,15 +17,33 @@ logger = logging.getLogger(__name__)
 
 
 class Embedder(Protocol):
-    model_name: str
+    model_name: str  # recorded on each collection; queries must match it
     max_input_tokens: int | None  # text beyond this is silently truncated by the model
+    batch_size: int  # chunks per embed() call during ingestion
 
-    def embed(self, texts: list[str]) -> list[list[float]]: ...
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed documents (chunks)."""
+        ...
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a search query. Some models embed queries differently from documents."""
+        ...
 
 
-class OnnxMiniLMEmbedder:
+class _SymmetricEmbedder:
+    """For models that embed queries and documents the same way."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        raise NotImplementedError
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
+
+
+class OnnxMiniLMEmbedder(_SymmetricEmbedder):
     model_name = "all-MiniLM-L6-v2"
     max_input_tokens = 256
+    batch_size = 64
 
     def __init__(self) -> None:
         from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
@@ -34,8 +54,10 @@ class OnnxMiniLMEmbedder:
         return [list(map(float, v)) for v in self._fn(texts)]
 
 
-class OnnxSentenceEmbedder:
+class OnnxSentenceEmbedder(_SymmetricEmbedder):
     """Runs a sentence-transformers ONNX export that outputs a pooled `sentence_embedding`."""
+
+    batch_size = 8  # large model, long chunks: small batches keep CPU memory in check
 
     def __init__(self, repo_id: str, max_input_tokens: int, cache_dir: str) -> None:
         import onnxruntime as ort
@@ -77,7 +99,9 @@ ONNX_MODELS: dict[str, int] = {
 }
 
 
-class SentenceTransformerEmbedder:
+class SentenceTransformerEmbedder(_SymmetricEmbedder):
+    batch_size = 32
+
     def __init__(self, model_name: str) -> None:
         try:
             from sentence_transformers import SentenceTransformer
@@ -93,7 +117,18 @@ class SentenceTransformerEmbedder:
         return self._model.encode(texts, normalize_embeddings=True).tolist()
 
 
-def create_embedder(model_name: str, cache_dir: str = "~/.cache/rag-generator/models") -> Embedder:
+def create_embedder(
+    model_name: str,
+    cache_dir: str = "~/.cache/rag-generator/models",
+    voyage_api_key: str | None = None,
+    dimensions: int | None = None,
+) -> Embedder:
+    if model_name.startswith("voyage-"):
+        from app.voyage import VoyageEmbedder
+
+        return VoyageEmbedder(model_name, voyage_api_key, dimensions)
+    if dimensions:
+        raise ValueError(f"embedding_dimensions is only supported for Voyage models, not {model_name!r}")
     if model_name == OnnxMiniLMEmbedder.model_name:
         return OnnxMiniLMEmbedder()
     if model_name in ONNX_MODELS:

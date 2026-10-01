@@ -14,11 +14,20 @@ class FakeEmbedder:
     def __init__(self, model_name: str = "fake-embedder", dim: int = 256) -> None:
         self.model_name = model_name
         self.max_input_tokens = None
+        self.batch_size = 64
         self.dim = dim
         self.calls: list[int] = []  # batch sizes, to check batching
+        self.query_calls = 0
+
+    def embed_query(self, text: str) -> list[float]:
+        self.query_calls += 1
+        return self._vectors([text])[0]
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         self.calls.append(len(texts))
+        return self._vectors(texts)
+
+    def _vectors(self, texts: list[str]) -> list[list[float]]:
         out = []
         for text in texts:
             vec = [0.0] * self.dim

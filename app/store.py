@@ -64,10 +64,10 @@ def sha256_hex(data: bytes) -> str:
 
 
 class DocumentStore:
-    def __init__(self, client: ClientAPI, embedder: Embedder, embedding_batch_size: int = 64) -> None:
+    def __init__(self, client: ClientAPI, embedder: Embedder, embedding_batch_size: int | None = None) -> None:
         self._client = client
         self._embedder = embedder
-        self._batch_size = embedding_batch_size
+        self._batch_size = embedding_batch_size or embedder.batch_size
 
     @property
     def embedder(self) -> Embedder:
@@ -188,8 +188,7 @@ class DocumentStore:
         ]
 
     def embed_query(self, text: str) -> list[float]:
-        [vector] = self._embedder.embed([text])
-        return vector
+        return self._embedder.embed_query(text)
 
     def query(
         self, collection_id: str, text: str, top_k: int, vector: list[float] | None = None

@@ -10,8 +10,9 @@ from typing import Any
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
-from app.config import Settings, get_settings
+from app.config import Settings, get_secrets, get_settings
 from app.embeddings import create_embedder
+from app.errors import ProviderError
 from app.ingest.parsers import UnsupportedFileType, check_supported
 from app.ingest.pipeline import ingest_file
 from app.jobs import JobRegistry
@@ -53,10 +54,14 @@ def build_state(
     llm: LLMClient | None = None,
     reranker: Reranker | None = _DEFAULT,
 ) -> AppState:
+    secrets = get_secrets()
+    voyage_key = secrets.voyage_api_key.get_secret_value() if secrets.voyage_api_key else None
     if store is None:
         store = DocumentStore(
             create_client(settings.chroma_persist_dir),
-            create_embedder(settings.embedding_model, settings.model_cache_dir),
+            create_embedder(
+                settings.embedding_model, settings.model_cache_dir, voyage_key, settings.embedding_dimensions
+            ),
             settings.embedding_batch_size,
         )
     window = store.embedder.max_input_tokens
@@ -70,7 +75,7 @@ def build_state(
         )
     llm = llm or create_llm(settings)
     if reranker is _DEFAULT:
-        reranker = create_reranker(settings.reranker_model, settings.model_cache_dir)
+        reranker = create_reranker(settings.reranker_model, settings.model_cache_dir, voyage_key)
     rag = RagPipeline(create_retriever(settings.retrieval_mode, store), llm, settings, reranker)
     return AppState(settings=settings, store=store, jobs=JobRegistry(), rag=rag)
 
@@ -183,7 +188,7 @@ def _query_errors(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail="collection not found")
     if isinstance(exc, EmbeddingModelMismatch):
         return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, LLMError):
+    if isinstance(exc, (LLMError, ProviderError)):
         return HTTPException(status_code=502, detail=str(exc))
     raise exc
 
@@ -193,7 +198,7 @@ def query(collection_id: str, body: QueryRequest, st: AppState = Depends(state))
     _require_collection(st, collection_id)
     try:
         return st.rag.answer(collection_id, body.question, body.history)
-    except (CollectionNotFound, EmbeddingModelMismatch, LLMError) as exc:
+    except (CollectionNotFound, EmbeddingModelMismatch, LLMError, ProviderError) as exc:
         raise _query_errors(exc) from exc
 
 
@@ -205,7 +210,7 @@ def query_stream(collection_id: str, body: QueryRequest, st: AppState = Depends(
     try:
         # Run retrieval eagerly so setup errors become proper HTTP status codes.
         first = next(events)
-    except (CollectionNotFound, EmbeddingModelMismatch, LLMError) as exc:
+    except (CollectionNotFound, EmbeddingModelMismatch, LLMError, ProviderError) as exc:
         raise _query_errors(exc) from exc
 
     def ndjson() -> Iterator[str]:

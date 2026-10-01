@@ -1,5 +1,8 @@
 """Cross-encoder reranker.
 
+The default is Voyage's hosted `rerank-2.5` (see app/voyage.py). This module holds
+the local ONNX alternative and the factory that picks between them.
+
 A bi-encoder (the embedding model) embeds question and passage separately, which
 is fast but loses detail. A cross-encoder reads the question and passage together
 and scores how well the passage answers it. It is too slow to run over a whole
@@ -72,5 +75,11 @@ class OnnxCrossEncoder:
         return [replace(c, rerank_score=s) for c, s in ranked[:top_n]]
 
 
-def create_reranker(model: str | None, cache_dir: str) -> Reranker | None:
-    return OnnxCrossEncoder(model, cache_dir) if model else None
+def create_reranker(model: str | None, cache_dir: str, voyage_api_key: str | None = None) -> Reranker | None:
+    if not model:
+        return None
+    if model.startswith("rerank-"):  # Voyage rerankers: rerank-2.5, rerank-2.5-lite
+        from app.voyage import VoyageReranker
+
+        return VoyageReranker(model, voyage_api_key)
+    return OnnxCrossEncoder(model, cache_dir)

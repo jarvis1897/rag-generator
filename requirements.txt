@@ -6,6 +6,7 @@ chromadb>=0.5
 pymupdf>=1.24
 python-docx>=1.1
 anthropic>=0.70
+voyageai>=0.5
 rank_bm25>=0.2.2
 # Cross-encoder reranker (also pulled in by chromadb; pinned here because we import them)
 onnxruntime>=1.17
