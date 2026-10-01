@@ -6,7 +6,7 @@ fusion (RRF). BM25 helps with exact terms (product codes, names, numbers) that
 small embedding models blur together.
 
 Either way, each returned chunk's `score` is its dense cosine similarity, so the
-MIN_RELEVANCE_SCORE threshold means the same thing in both modes. RRF only
+min_relevance_score threshold means the same thing in both modes. RRF only
 decides which chunks make the top-k and in what order.
 """
 
@@ -112,4 +112,4 @@ def create_retriever(mode: str, store: DocumentStore) -> Retriever:
         return DenseRetriever(store)
     if mode == "hybrid":
         return HybridRetriever(store)
-    raise ValueError(f"unknown RETRIEVAL_MODE {mode!r}")
+    raise ValueError(f"unknown retrieval_mode {mode!r}")

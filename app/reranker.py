@@ -7,7 +7,7 @@ collection, so we retrieve a wider candidate pool cheaply and rerank only that.
 
 The default model, ms-marco-MiniLM-L-6-v2, runs through ONNX Runtime with the
 `tokenizers` library (both already Chroma dependencies), so no PyTorch is needed.
-`RERANKER_MODEL` takes any Hugging Face repo with `onnx/model.onnx` and `tokenizer.json`.
+`reranker_model` in app/config.py takes any Hugging Face repo with `onnx/model.onnx` and `tokenizer.json`.
 """
 
 import logging
@@ -27,14 +27,15 @@ class Reranker(Protocol):
 
 
 class OnnxCrossEncoder:
-    def __init__(self, repo_id: str, batch_size: int = 16) -> None:
+    def __init__(self, repo_id: str, cache_dir: str, batch_size: int = 16) -> None:
         import onnxruntime as ort
-        from huggingface_hub import hf_hub_download
         from tokenizers import Tokenizer
 
+        from app.hf import download_onnx_model
+
         start = time.perf_counter()
-        model_path = hf_hub_download(repo_id, "onnx/model.onnx")
-        tokenizer_path = hf_hub_download(repo_id, "tokenizer.json")
+        path = download_onnx_model(repo_id, cache_dir, ["onnx/model.onnx", "tokenizer.json"])
+        model_path, tokenizer_path = str(path / "onnx" / "model.onnx"), str(path / "tokenizer.json")
         self._session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         self._input_names = {i.name for i in self._session.get_inputs()}
         self._tokenizer = Tokenizer.from_file(tokenizer_path)
@@ -71,5 +72,5 @@ class OnnxCrossEncoder:
         return [replace(c, rerank_score=s) for c, s in ranked[:top_n]]
 
 
-def create_reranker(model: str | None) -> Reranker | None:
-    return OnnxCrossEncoder(model) if model else None
+def create_reranker(model: str | None, cache_dir: str) -> Reranker | None:
+    return OnnxCrossEncoder(model, cache_dir) if model else None

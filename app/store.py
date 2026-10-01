@@ -120,7 +120,7 @@ class DocumentStore:
         if stored != self._embedder.model_name:
             raise EmbeddingModelMismatch(
                 f"collection was built with embedding model {stored!r} but "
-                f"EMBEDDING_MODEL is {self._embedder.model_name!r}"
+                f"embedding_model in app/config.py is {self._embedder.model_name!r}; re-ingest into a new collection"
             )
         return col
 

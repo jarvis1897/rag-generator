@@ -3,15 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    env_file:
+    env_file:  # secrets only; settings come from app/config.py
       - path: .env
         required: false
-    environment:
-      # Persist the index in a named volume so it survives restarts.
-      CHROMA_PERSIST_DIR: /data/chroma
     volumes:
-      - chroma_data:/data/chroma
-      # Cache the downloaded embedding model between container rebuilds.
+      # chroma_persist_dir defaults to ./chroma_data, i.e. /srv/chroma_data in the container.
+      - chroma_data:/srv/chroma_data
+      # Downloaded models (~2.4 GB) survive container rebuilds.
       - model_cache:/root/.cache
     ports:
       - "8000:8000"
@@ -20,7 +18,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 600s  # first start downloads the models
 
   ui:
     build:

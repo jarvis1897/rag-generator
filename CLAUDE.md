@@ -24,9 +24,9 @@ Out of scope for now. Do not add these unless asked:
 
 - Backend: Python, FastAPI
 - Frontend: Streamlit, which talks to the backend over HTTP only. It does not import backend modules.
-- Vector store: Chroma. Use the persistent client when `CHROMA_PERSIST_DIR` is set, otherwise the in-memory client.
+- Vector store: Chroma. Use the persistent client when `chroma_persist_dir` is set, otherwise the in-memory client.
 - Parsing: PyMuPDF for PDFs, python-docx for DOCX, plain read for TXT and MD
-- Config: pydantic-settings, loaded from env vars or `.env`
+- Config: a plain `Settings` model in `app/config.py` for all settings; pydantic-settings `Secrets` reads only API keys from env or `.env`
 
 ## Architecture
 
@@ -94,9 +94,10 @@ These are the core of the project. Keep them strict.
 
 ## Config
 
-All of these come from env vars, with defaults in `config.py`:
+Every setting has exactly one home, so no value is ever defined in two places:
 
-`EMBEDDING_MODEL`, `LLM_PROVIDER`, `LLM_MODEL`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `MIN_RELEVANCE_SCORE`, `CHROMA_PERSIST_DIR`, `MAX_UPLOAD_MB`
+- Settings (`embedding_model`, `llm_provider`, `llm_model`, `chunk_size`, `chunk_overlap`, `top_k`, `min_relevance_score`, `chroma_persist_dir`, `max_upload_mb`, and the rest) live only in `app/config.py` as defaults. They are not read from env vars or `.env`; a setting name found there is ignored with a startup warning.
+- `.env` holds secrets only (API keys). Never add settings to `.env` or `.env.example`.
 
 Do not hardcode any of these in application code. API keys come from env only and are never logged.
 

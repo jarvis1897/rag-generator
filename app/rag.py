@@ -3,7 +3,7 @@
 Flow for one question:
 1. If there is chat history, rewrite the question into a standalone query.
 2. Retrieve top-k chunks from the one collection the query is scoped to.
-3. If the best chunk scores below MIN_RELEVANCE_SCORE, refuse without calling the LLM.
+3. If the best chunk scores below min_relevance_score, refuse without calling the LLM.
 4. Otherwise build a prompt of numbered chunks and generate an answer with citations.
 """
 

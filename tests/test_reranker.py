@@ -1,7 +1,9 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+from app.config import Settings
 from app.ingest.pipeline import ingest_file
 from app.rag import RagPipeline
 from app.retrieval import DenseRetriever
@@ -79,14 +81,11 @@ def test_candidates_must_cover_top_k() -> None:
     settings(top_k=10, retrieval_candidates=5, reranker_model="")  # fine with reranking off
 
 
-def _cached_model() -> bool:
-    from huggingface_hub import hf_hub_download
+CACHE_DIR = Settings().model_cache_dir
 
-    try:
-        hf_hub_download("Xenova/ms-marco-MiniLM-L-6-v2", "onnx/model.onnx", local_files_only=True)
-        return True
-    except Exception:
-        return False
+
+def _cached_model() -> bool:
+    return (Path(CACHE_DIR).expanduser() / "Xenova--ms-marco-MiniLM-L-6-v2" / "onnx" / "model.onnx").exists()
 
 
 @pytest.mark.skipif(not _cached_model(), reason="reranker model not downloaded")
@@ -101,7 +100,7 @@ def test_onnx_cross_encoder_ranks_the_answer_first() -> None:
         chunk("The Ember stove boils 1 litre of water in 3 minutes 20 seconds at sea level."),
         chunk("Return shipping costs $8.50 for non-members."),
     ]
-    ranked = OnnxCrossEncoder("Xenova/ms-marco-MiniLM-L-6-v2").rerank(
+    ranked = OnnxCrossEncoder("Xenova/ms-marco-MiniLM-L-6-v2", CACHE_DIR).rerank(
         "How fast does the Ember stove boil water?", chunks, top_n=2
     )
     assert "boils" in ranked[0].text

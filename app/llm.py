@@ -8,7 +8,7 @@ import logging
 from collections.abc import Iterator
 from typing import Literal, Protocol
 
-from app.config import Settings
+from app.config import Secrets, Settings, get_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class AnthropicLLM:
         except anthropic.RateLimitError as exc:
             raise LLMError("LLM provider rate limit hit, try again shortly") from exc
         except anthropic.AuthenticationError as exc:
-            raise LLMError("LLM provider rejected the API key; check ANTHROPIC_API_KEY") from exc
+            raise LLMError("LLM provider rejected the API key; check ANTHROPIC_API_KEY in .env") from exc
         except anthropic.APIStatusError as exc:
             raise LLMError(f"LLM provider error {exc.status_code}: {exc.message}") from exc
         except anthropic.AnthropicError as exc:
@@ -98,8 +98,9 @@ class AnthropicLLM:
         return "".join(self.stream(system, messages, max_tokens, effort))
 
 
-def create_llm(settings: Settings) -> LLMClient:
+def create_llm(settings: Settings, secrets: Secrets | None = None) -> LLMClient:
+    secrets = secrets or get_secrets()
     if settings.llm_provider == "anthropic":
-        key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
+        key = secrets.anthropic_api_key.get_secret_value() if secrets.anthropic_api_key else None
         return AnthropicLLM(settings.llm_model, settings.llm_refusal_fallback, api_key=key)
     raise ValueError(f"unknown LLM_PROVIDER {settings.llm_provider!r}")

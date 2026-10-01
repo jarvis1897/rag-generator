@@ -56,13 +56,13 @@ def build_state(
     if store is None:
         store = DocumentStore(
             create_client(settings.chroma_persist_dir),
-            create_embedder(settings.embedding_model),
+            create_embedder(settings.embedding_model, settings.model_cache_dir),
             settings.embedding_batch_size,
         )
     window = store.embedder.max_input_tokens
     if window and settings.chunk_size > window:
         logger.warning(
-            "CHUNK_SIZE=%d exceeds %s's input window of %d tokens; the end of each chunk "
+            "chunk_size=%d exceeds %s's input window of %d tokens; the end of each chunk "
             "will not be embedded and retrieval will miss it",
             settings.chunk_size,
             settings.embedding_model,
@@ -70,7 +70,7 @@ def build_state(
         )
     llm = llm or create_llm(settings)
     if reranker is _DEFAULT:
-        reranker = create_reranker(settings.reranker_model)
+        reranker = create_reranker(settings.reranker_model, settings.model_cache_dir)
     rag = RagPipeline(create_retriever(settings.retrieval_mode, store), llm, settings, reranker)
     return AppState(settings=settings, store=store, jobs=JobRegistry(), rag=rag)
 

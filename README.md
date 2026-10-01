@@ -4,8 +4,8 @@ Upload documents at runtime, build a retrieval index over them, and ask question
 that get answered only from those documents, with inline citations. Works with any
 document set without code changes.
 
-- **Backend:** FastAPI, Chroma (one collection per document set), local
-  `all-MiniLM-L6-v2` embeddings, Claude for generation
+- **Backend:** FastAPI, Chroma (one collection per document set), local `BAAI/bge-m3`
+  embeddings (8192-token window, 1024 dims), a cross-encoder reranker, Claude for generation
 - **Frontend:** Streamlit, talking to the backend over HTTP only
 - **Formats:** PDF (with page numbers), DOCX, TXT, MD
 
@@ -29,7 +29,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 
-cp .env.example .env               # then set ANTHROPIC_API_KEY
+cp .env.example .env               # then set ANTHROPIC_API_KEY (the only thing .env holds)
 ```
 
 Run the API and the UI in two terminals:
@@ -39,8 +39,9 @@ uvicorn app.main:app --reload                 # http://localhost:8000/docs
 streamlit run ui/streamlit_app.py             # http://localhost:8501
 ```
 
-The first ingestion downloads the ONNX embedding model (about 80 MB) into `~/.cache/chroma`,
-and the first startup downloads the reranker (about 90 MB) into `~/.cache/huggingface`.
+The first startup downloads the embedding model (bge-m3, about 2.3 GB) and the reranker
+(about 90 MB) into `~/.cache/rag-generator/models`, so it takes a few minutes once. Later
+starts load them in about 5 seconds.
 
 ### Docker Compose
 
@@ -50,7 +51,7 @@ docker compose up --build
 ```
 
 The UI is at http://localhost:8501 and the API at http://localhost:8000. The index
-persists in the `chroma_data` volume.
+persists in the `chroma_data` volume and the models in `model_cache`.
 
 ## Using it
 
@@ -73,7 +74,7 @@ persists in the `chroma_data` volume.
 | `POST` | `/collections/{id}/query` | `{question, history?}` returns `{answer, sources[], grounded, standalone_question}` |
 | `POST` | `/collections/{id}/query/stream` | Same, as NDJSON events: `sources`, `token`..., `done` (or `error`) |
 
-Unsupported file types return 400 and files over `MAX_UPLOAD_MB` return 413, both
+Unsupported file types return 400 and files over `max_upload_mb` return 413, both
 before anything is ingested. Every query is scoped to exactly one collection.
 
 ```bash
@@ -86,30 +87,39 @@ curl -s -X POST localhost:8000/collections/$CID/query -H 'content-type: applicat
 
 ## Configuration
 
-Everything comes from environment variables or `.env` (see [.env.example](.env.example)).
+Each value has exactly one home, so nothing can be set in two places that disagree:
 
-| Variable | Default | Notes |
+- **Settings** live only in [app/config.py](app/config.py), as defaults in the `Settings`
+  class. Edit that file to change them. They are not read from environment variables or
+  `.env`; if a setting name appears there, it is ignored and a warning is logged at startup.
+- **Secrets** (`ANTHROPIC_API_KEY`) live only in `.env` or the environment, never in code
+  or logs. If unset, the Anthropic SDK falls back to `ANTHROPIC_AUTH_TOKEN` or an
+  `ant auth login` profile.
+
+| Setting | Default | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | (none) | From the environment or `.env`; held as a secret and never logged. If unset, the SDK falls back to `ANTHROPIC_AUTH_TOKEN` or an `ant auth login` profile |
-| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Any other name loads via `sentence-transformers` (install it separately) |
-| `LLM_PROVIDER` | `anthropic` | Only provider implemented; see `app/llm.py` to add one |
-| `LLM_MODEL` | `claude-opus-5` | |
-| `LLM_REFUSAL_FALLBACK` | `true` | Server-side fallback if the model declines; disable on platforms that reject it |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `250` / `40` | Approximate tokens; see trade-offs below |
-| `TOP_K` | `5` | Chunks sent to the LLM per question |
-| `RETRIEVAL_CANDIDATES` | `15` | Chunks retrieved for the reranker to choose from (must be at least `TOP_K`) |
-| `RERANKER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | ONNX cross-encoder from Hugging Face. Empty disables reranking (then `TOP_K` are retrieved directly) |
-| `MIN_RELEVANCE_SCORE` | `0.25` | Cosine similarity; below this the app refuses without calling the LLM |
-| `RETRIEVAL_MODE` | `hybrid` | BM25 + dense with reciprocal rank fusion; `dense` uses embeddings only |
-| `CHROMA_PERSIST_DIR` | (unset) | Unset means in-memory Chroma |
-| `MAX_UPLOAD_MB` | `25` | Per file |
-| `API_URL` | `http://localhost:8000` | Used by the UI and eval script |
+| `embedding_model` | `BAAI/bge-m3` | Also `all-MiniLM-L6-v2`; any other name loads via `sentence-transformers` (install separately). Changing it requires re-ingesting |
+| `embedding_batch_size` | `8` | Chunks per embedding call; small because chunks are long |
+| `llm_provider` / `llm_model` | `anthropic` / `claude-opus-5` | Only Anthropic is implemented; see `app/llm.py` to add one |
+| `llm_refusal_fallback` | `True` | Server-side fallback if the model declines; disable on platforms that reject it |
+| `chunk_size` / `chunk_overlap` | `512` / `80` | Approximate tokens; see trade-offs below |
+| `top_k` | `5` | Chunks sent to the LLM per question |
+| `retrieval_candidates` | `15` | Chunks retrieved for the reranker to choose from (at least `top_k`) |
+| `reranker_model` | `Xenova/ms-marco-MiniLM-L-6-v2` | ONNX cross-encoder; `None` disables reranking |
+| `min_relevance_score` | `0.42` | Cosine similarity; below this the app refuses without calling the LLM. Calibrated for bge-m3 |
+| `retrieval_mode` | `hybrid` | BM25 + dense with reciprocal rank fusion; `dense` uses embeddings only |
+| `chroma_persist_dir` | `./chroma_data` | `None` means in-memory Chroma |
+| `max_upload_mb` | `25` | Per file |
+| `model_cache_dir` | `~/.cache/rag-generator/models` | Downloaded models |
+
+The Streamlit UI and the eval script are separate processes that don't import the
+backend; they find the API at `API_URL` (default `http://localhost:8000`).
 
 ## Grounding rules
 
 These are enforced in [app/rag.py](app/rag.py) and covered by tests:
 
-1. If the best retrieved chunk scores below `MIN_RELEVANCE_SCORE`, the response is
+1. If the best retrieved chunk scores below `min_relevance_score`, the response is
    `grounded: false` with a fixed message, and **the LLM is not called**.
 2. The system prompt allows only facts from the context, requires inline
    `[filename p.N]` citations, and gives an exact sentence to use when the context
@@ -145,51 +155,64 @@ Detailed per-question results are written to `eval/results/latest.json`.
 
 ## Design trade-offs
 
-**In-memory vs persistent Chroma.** With `CHROMA_PERSIST_DIR` unset, Chroma runs in
-memory: no setup and nothing to clean up, which suits tests and demos, but every
-restart loses all collections. Setting it writes to disk (Docker Compose does this
-by default). Ingestion job status is held in memory either way, so it is lost on
+**In-memory vs persistent Chroma.** By default Chroma writes to `./chroma_data`, so
+collections survive restarts. Setting `chroma_persist_dir = None` runs it in memory:
+no setup and nothing to clean up, which suits tests and demos, but every restart
+loses all collections. To clear the index, stop the API and delete `chroma_data`. Ingestion job status is held in memory either way, so it is lost on
 restart and doesn't work across multiple API workers. A real deployment would move
 jobs to Redis or a database table.
 
-**Chunk sizing.** The brief suggested about 800 tokens with 100 overlap, but
-`all-MiniLM-L6-v2` only reads the first 256 word-pieces of its input and silently
-drops the rest. At 800 tokens, facts near the end of a chunk were never embedded.
-On the eval set, "How fast does the Ember stove boil a litre of water?" scored
-0.065 because that paragraph sat at the end of a long chunk. At 250/40, every
-answerable eval question retrieves its expected source as the top hit. The app logs
-a warning at startup if `CHUNK_SIZE` exceeds the embedding model's window. If you
-switch to a long-context embedding model, larger chunks give the LLM more
-surrounding context per hit. Sizes are estimated at 4 characters per token rather
-than using a tokenizer: the estimate only needs to be roughly right, and the
-embedding model's tokenizer differs from the LLM's anyway.
+**Embedding model and chunk sizing.** The first version used `all-MiniLM-L6-v2`, which
+reads only 256 word-pieces and silently drops the rest. That capped chunks at about 250
+tokens: at 800, a fact at the end of a chunk was never embedded (an eval question about
+the Ember stove scored 0.065 for that reason). That is too small for legal and similar
+documents, where a clause and its conditions, exceptions and defined terms need to stay
+in one chunk. The default is now `BAAI/bge-m3`:
 
-**Threshold choice.** `MIN_RELEVANCE_SCORE=0.25` comes from the best-chunk scores on
-the eval set with MiniLM at 250-token chunks:
+| | all-MiniLM-L6-v2 | BAAI/bge-m3 |
+|---|---|---|
+| Input window | 256 tokens | 8192 tokens |
+| Vector size | 384 | 1024 |
+| Download | about 80 MB | about 2.3 GB |
+| Chunk-level recall@5 / MRR (20 eval + paraphrased questions) | 20/20 / 0.94 | 20/20 / 1.00 |
 
-| | Best-chunk cosine scores |
+Chunks are 512 tokens with 80 overlap. bge-m3 could take far more, but the reranker
+reads at most 512 tokens of question plus passage, so larger chunks would be partly
+invisible to it. Larger chunks also make citations less precise. To go bigger, swap in
+a long-context reranker (such as `BAAI/bge-reranker-v2-m3`) first. The app logs a warning
+at startup if `chunk_size` exceeds the embedding model's window. Sizes are estimated
+at 4 characters per token rather than with a tokenizer; the estimate only needs to be
+roughly right. The cost is speed: bge-m3 is a 568M-parameter model, so ingestion on
+CPU is much slower than with MiniLM (a long contract can take minutes). Queries embed
+one short question and stay fast.
+
+**Threshold choice.** `min_relevance_score = 0.42` comes from best-chunk cosine scores
+on the sample docs with bge-m3 at 512-token chunks:
+
+| Question type | Best-chunk score |
 |---|---|
-| Answerable (12) | 0.27 to 0.81 |
-| Unanswerable (3) | 0.24, 0.28, 0.40 |
+| Answerable, including 10 paraphrases | 0.467 to 0.725 |
+| Clearly off-topic (5) | 0.285 to 0.383 |
+| On-topic but unanswerable (3) | 0.360, 0.448, 0.551 |
 
-The two ranges overlap. "Does Halcyon ship to Canada?" (0.40) shares vocabulary with
-the returns policy, so it outscores real questions. No threshold separates them
-cleanly, so it is a coarse first filter: it catches clearly off-topic questions
-cheaply and without an LLM call, and is set low enough not to refuse real
-questions. The strict prompt (rule 2) handles the rest. Raising the threshold trades
-false refusals for fewer LLM calls on off-topic questions. Scores depend on the
-embedding model, so re-check this value if you change `EMBEDDING_MODEL`.
+0.42 refuses every off-topic question without an LLM call and keeps every answerable
+one, with about 0.04 to 0.05 of margin on each side. On-topic unanswerable questions
+("Does Halcyon ship to Canada?" scores 0.55) can't be separated by any threshold, so
+the strict prompt (rule 2) handles them. bge-m3 scores run higher than MiniLM's (the
+old threshold was 0.25), which is why this must be re-checked whenever
+`embedding_model` changes, and ideally on your own documents: raising it trades false
+refusals for fewer LLM calls.
 
-**Hybrid retrieval.** `RETRIEVAL_MODE=hybrid` merges BM25 and dense rankings with
+**Hybrid retrieval.** `retrieval_mode = "hybrid"` merges BM25 and dense rankings with
 reciprocal rank fusion. It helps with exact tokens like part numbers that small
 embedding models blur together. RRF only picks and orders the chunks: each returned
 chunk keeps its dense cosine score, so the threshold means the same thing in both
 modes. It is the default because dense-only retrieval missed too much ground truth
-in practice: keyword matches catch exact names, numbers and codes that the small
-embedding model ranks low. With reranking on, hybrid fills the 15-candidate pool
+in practice: keyword matches catch exact names, numbers, section references and
+defined terms that embeddings blur together. With reranking on, hybrid fills the 15-candidate pool
 from both rankings (up to 60 chunks each before fusion), and the cross-encoder then
 picks the best 5. The cost is a BM25 index per collection held in memory, rebuilt
-when documents are added. Set `RETRIEVAL_MODE=dense` to go back.
+when documents are added. Set `retrieval_mode = "dense"` to go back.
 
 **Reranking.** The embedding model scores question and passage separately, so it
 can rank a passage that merely shares vocabulary above the one that answers the
@@ -205,11 +228,13 @@ reranking moved the answer chunk higher: MRR went from 0.93 to 0.97 with dense
 retrieval. Expect the recall gain on larger collections, where the answer can rank
 below 5th. Measure it with `run_eval.py`'s context recall on your own documents.
 
-**Embeddings run locally.** The ONNX MiniLM model needs no API key or PyTorch and is
-fast on CPU, but its quality is modest. The embedder sits behind a small interface
-([app/embeddings.py](app/embeddings.py)), and the collection records which model
-built it. Querying with a different `EMBEDDING_MODEL` returns 409 instead of
-silently giving bad results.
+**Embeddings run locally.** bge-m3 runs through ONNX Runtime with no PyTorch and no API
+key, so document text never leaves the machine, which matters for confidential legal
+material. A hosted legal model such as Voyage's `voyage-law-2` might retrieve better, at
+a per-token cost and with documents sent to a third party. The embedder sits behind a
+small interface ([app/embeddings.py](app/embeddings.py)), and each collection records
+which model built it. Querying with a different `embedding_model` returns 409 instead
+of silently giving bad results.
 
 ## Project layout
 
@@ -226,6 +251,7 @@ app/
   store.py           Chroma wrapper: collections, add, query
   retrieval.py       Dense and hybrid (BM25 + RRF) retrievers
   reranker.py        ONNX cross-encoder reranker
+  hf.py              Model downloads from the Hugging Face Hub
   rag.py             Rewrite, retrieve, threshold, prompt, generate
   llm.py             LLM wrapper (Anthropic)
   jobs.py            In-memory ingestion job registry

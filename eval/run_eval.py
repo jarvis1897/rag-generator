@@ -94,7 +94,7 @@ def main() -> int:
         settings = get_settings()
         if args.judge_model:
             settings = settings.model_copy(update={"llm_model": args.judge_model})
-        llm = create_llm(settings)
+        llm = create_llm(settings)  # API key comes from .env via Secrets
 
     questions = yaml.safe_load(args.questions.read_text(encoding="utf-8"))["questions"]
     cid = args.collection_id

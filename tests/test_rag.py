@@ -30,7 +30,7 @@ class FakeLLM:
 
 
 def settings(**overrides) -> Settings:
-    base = dict(min_relevance_score=0.3, top_k=3, chroma_persist_dir=None, _env_file=None)
+    base = dict(min_relevance_score=0.3, top_k=3, chroma_persist_dir=None)
     return Settings(**{**base, **overrides})
 
 
