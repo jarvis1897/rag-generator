@@ -15,6 +15,7 @@ from typing import Any
 
 from app.config import Settings
 from app.llm import LLMClient
+from app.reranker import Reranker
 from app.retrieval import Retriever
 from app.schemas import ChatTurn, QueryResponse, Source
 from app.store import RetrievedChunk
@@ -65,6 +66,7 @@ def to_sources(chunks: list[RetrievedChunk]) -> list[Source]:
             chunk_index=c.chunk_index,
             doc_id=c.doc_id,
             score=round(c.score, 4),
+            rerank_score=round(c.rerank_score, 4) if c.rerank_score is not None else None,
             text=c.text,
         )
         for i, c in enumerate(chunks, start=1)
@@ -87,10 +89,13 @@ def is_refusal(answer: str) -> bool:
 
 
 class RagPipeline:
-    def __init__(self, retriever: Retriever, llm: LLMClient, settings: Settings) -> None:
+    def __init__(
+        self, retriever: Retriever, llm: LLMClient, settings: Settings, reranker: Reranker | None = None
+    ) -> None:
         self._retriever = retriever
         self._llm = llm
         self._settings = settings
+        self._reranker = reranker
 
     def rewrite_question(self, question: str, history: list[ChatTurn]) -> str:
         turns = history[-self._settings.history_turns :] if self._settings.history_turns else []
@@ -107,17 +112,25 @@ class RagPipeline:
     def prepare(self, collection_id: str, question: str, history: list[ChatTurn]) -> PreparedQuery:
         start = time.perf_counter()
         standalone = self.rewrite_question(question, history)
-        chunks = self._retriever.retrieve(collection_id, standalone, self._settings.top_k)
-        best = max((c.score for c in chunks), default=0.0)
+        top_k = self._settings.top_k
+        n = self._settings.retrieval_candidates if self._reranker else top_k
+        candidates = self._retriever.retrieve(collection_id, standalone, n)
+        # The threshold gate uses dense cosine over the whole candidate pool: cross-encoder
+        # logits are unbounded and uncalibrated, so they make a poor absolute cutoff.
+        best = max((c.score for c in candidates), default=0.0)
         grounded = best >= self._settings.min_relevance_score
         logger.info(
-            "retrieved %d chunks from %s in %.2fs (best score %.3f, threshold %.3f)",
-            len(chunks),
+            "retrieved %d candidates from %s in %.2fs (best score %.3f, threshold %.3f)",
+            len(candidates),
             collection_id,
             time.perf_counter() - start,
             best,
             self._settings.min_relevance_score,
         )
+        if self._reranker and grounded:
+            chunks = self._reranker.rerank(standalone, candidates, top_k)
+        else:
+            chunks = candidates[:top_k]
         return PreparedQuery(standalone_question=standalone, chunks=chunks, grounded=grounded)
 
     def stream_answer(self, prepared: PreparedQuery) -> Iterator[str]:

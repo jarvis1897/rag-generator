@@ -13,7 +13,7 @@ ROCKETS = b"Rockets burn liquid oxygen and kerosene as propellant to reach orbit
 
 @pytest.fixture
 def client(store):
-    app.state.rag_state = build_state(settings(max_upload_mb=1), store=store, llm=FakeLLM())
+    app.state.rag_state = build_state(settings(max_upload_mb=1), store=store, llm=FakeLLM(), reranker=None)
     with TestClient(app) as c:
         yield c
     del app.state.rag_state

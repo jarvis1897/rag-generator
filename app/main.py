@@ -5,6 +5,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,7 @@ from app.ingest.pipeline import ingest_file
 from app.jobs import JobRegistry
 from app.llm import LLMClient, LLMError, create_llm
 from app.rag import RagPipeline
+from app.reranker import Reranker, create_reranker
 from app.retrieval import create_retriever
 from app.schemas import (
     CollectionCreate,
@@ -42,7 +44,15 @@ class AppState:
     rag: RagPipeline
 
 
-def build_state(settings: Settings, store: DocumentStore | None = None, llm: LLMClient | None = None) -> AppState:
+_DEFAULT: Any = object()  # sentinel: build the reranker from settings
+
+
+def build_state(
+    settings: Settings,
+    store: DocumentStore | None = None,
+    llm: LLMClient | None = None,
+    reranker: Reranker | None = _DEFAULT,
+) -> AppState:
     if store is None:
         store = DocumentStore(
             create_client(settings.chroma_persist_dir),
@@ -59,7 +69,9 @@ def build_state(settings: Settings, store: DocumentStore | None = None, llm: LLM
             window,
         )
     llm = llm or create_llm(settings)
-    rag = RagPipeline(create_retriever(settings.retrieval_mode, store), llm, settings)
+    if reranker is _DEFAULT:
+        reranker = create_reranker(settings.reranker_model)
+    rag = RagPipeline(create_retriever(settings.retrieval_mode, store), llm, settings, reranker)
     return AppState(settings=settings, store=store, jobs=JobRegistry(), rag=rag)
 
 

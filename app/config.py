@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(default=40, ge=0)
 
     # Retrieval
+    # TOP_K chunks go to the LLM. With a reranker, RETRIEVAL_CANDIDATES chunks are
+    # retrieved first and the reranker picks the best TOP_K of them.
     top_k: int = Field(default=5, gt=0)
+    retrieval_candidates: int = Field(default=15, gt=0)
+    # Hugging Face repo with an ONNX cross-encoder. Empty disables reranking.
+    reranker_model: str | None = "Xenova/ms-marco-MiniLM-L-6-v2"
     min_relevance_score: float = Field(default=0.25, ge=0.0, le=1.0)
     retrieval_mode: Literal["dense", "hybrid"] = "dense"
     history_turns: int = Field(default=6, ge=0)
@@ -45,6 +50,10 @@ class Settings(BaseSettings):
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
         if self.chroma_persist_dir is not None and not self.chroma_persist_dir.strip():
             self.chroma_persist_dir = None
+        if self.reranker_model is not None and not self.reranker_model.strip():
+            self.reranker_model = None
+        if self.reranker_model and self.retrieval_candidates < self.top_k:
+            raise ValueError("RETRIEVAL_CANDIDATES must be at least TOP_K")
         return self
 
 

@@ -116,17 +116,22 @@ def main() -> int:
         if q["answerable"]:
             hits = [s for s in r["sources"] if s["filename"] == q["expected_source"]]
             row["retrieval_hit"] = bool(hits)
+            ranks = [s["index"] for s in r["sources"] if s["filename"] == q["expected_source"]]
+            row["reciprocal_rank"] = 1 / min(ranks) if ranks else 0.0
             if "expected_page" in q:
                 row["page_hit"] = any(s["page"] == q["expected_page"] for s in hits)
             if q.get("must_include"):
                 row["contains_expected"] = all(m.lower() in r["answer"].lower() for m in q["must_include"])
+                # Context recall: the ground-truth facts made it into the context the LLM saw.
+                context = " ".join(s["text"] for s in r["sources"]).lower()
+                row["context_recall"] = all(m.lower() in context for m in q["must_include"])
         row["refusal_correct"] = r["grounded"] == q["answerable"]
 
         if llm and r["grounded"]:
             row["faithful"], row["judge_reason"] = judge(llm, r["answer"], r["sources"])
 
         flags = []
-        for key in ("retrieval_hit", "page_hit", "contains_expected", "faithful", "refusal_correct"):
+        for key in ("retrieval_hit", "page_hit", "context_recall", "contains_expected", "faithful", "refusal_correct"):
             if key in row:
                 flags.append(f"{key}={'ok' if row[key] else 'FAIL'}")
         print(f"[{i}] {q['question']}\n    -> {r['answer'][:160].replace(chr(10), ' ')}\n    {'  '.join(flags)}")
@@ -142,6 +147,8 @@ def main() -> int:
     summary = {
         "retrieval_hit_rate": pct(sum(r["retrieval_hit"] for r in answerable), len(answerable)),
         "page_hit_rate": pct(sum(r["page_hit"] for r in paged), len(paged)),
+        "context_recall": pct(sum(r["context_recall"] for r in keyword), len(keyword)),
+        "mrr": f"{sum(r['reciprocal_rank'] for r in answerable) / len(answerable):.2f}" if answerable else "n/a",
         "answered_when_answerable": pct(sum(r["grounded"] for r in answerable), len(answerable)),
         "expected_facts_in_answer": pct(sum(r["contains_expected"] for r in keyword), len(keyword)),
         "faithfulness": pct(sum(r["faithful"] for r in judged), len(judged)) if llm else "skipped",

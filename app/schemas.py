@@ -64,7 +64,8 @@ class Source(BaseModel):
     page: int
     chunk_index: int
     doc_id: str
-    score: float
+    score: float  # dense cosine similarity
+    rerank_score: float | None = None  # cross-encoder score, when reranking is on
     text: str
 
 
