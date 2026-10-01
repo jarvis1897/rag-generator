@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Hugging Face repo with an ONNX cross-encoder. Empty disables reranking.
     reranker_model: str | None = "Xenova/ms-marco-MiniLM-L-6-v2"
     min_relevance_score: float = Field(default=0.25, ge=0.0, le=1.0)
-    retrieval_mode: Literal["dense", "hybrid"] = "dense"
+    retrieval_mode: Literal["dense", "hybrid"] = "hybrid"
     history_turns: int = Field(default=6, ge=0)
 
     # Storage. Empty/unset means in-memory Chroma.

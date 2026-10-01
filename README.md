@@ -100,7 +100,7 @@ Everything comes from environment variables or `.env` (see [.env.example](.env.e
 | `RETRIEVAL_CANDIDATES` | `15` | Chunks retrieved for the reranker to choose from (must be at least `TOP_K`) |
 | `RERANKER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | ONNX cross-encoder from Hugging Face. Empty disables reranking (then `TOP_K` are retrieved directly) |
 | `MIN_RELEVANCE_SCORE` | `0.25` | Cosine similarity; below this the app refuses without calling the LLM |
-| `RETRIEVAL_MODE` | `dense` | `hybrid` adds BM25 with reciprocal rank fusion |
+| `RETRIEVAL_MODE` | `hybrid` | BM25 + dense with reciprocal rank fusion; `dense` uses embeddings only |
 | `CHROMA_PERSIST_DIR` | (unset) | Unset means in-memory Chroma |
 | `MAX_UPLOAD_MB` | `25` | Per file |
 | `API_URL` | `http://localhost:8000` | Used by the UI and eval script |
@@ -184,7 +184,12 @@ embedding model, so re-check this value if you change `EMBEDDING_MODEL`.
 reciprocal rank fusion. It helps with exact tokens like part numbers that small
 embedding models blur together. RRF only picks and orders the chunks: each returned
 chunk keeps its dense cosine score, so the threshold means the same thing in both
-modes. On the small eval set both modes hit 12/12, so dense stays the default.
+modes. It is the default because dense-only retrieval missed too much ground truth
+in practice: keyword matches catch exact names, numbers and codes that the small
+embedding model ranks low. With reranking on, hybrid fills the 15-candidate pool
+from both rankings (up to 60 chunks each before fusion), and the cross-encoder then
+picks the best 5. The cost is a BM25 index per collection held in memory, rebuilt
+when documents are added. Set `RETRIEVAL_MODE=dense` to go back.
 
 **Reranking.** The embedding model scores question and passage separately, so it
 can rank a passage that merely shares vocabulary above the one that answers the
