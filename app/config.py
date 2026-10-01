@@ -65,9 +65,9 @@ class Settings(BaseModel):
     # Or a Hugging Face repo with an ONNX cross-encoder, e.g. "Xenova/ms-marco-MiniLM-L-6-v2"
     # (local, 512-token input). None disables reranking.
     reranker_model: str | None = "rerank-2.5"
-    # Cosine similarity gate, calibrated per embedding model (see README). Re-check it
+    # Cosine similarity gate, calibrated for voyage-4-large@2048 (bge-m3: 0.42; see README). Re-check it
     # whenever embedding_model changes.
-    min_relevance_score: float = Field(default=0.42, ge=0.0, le=1.0)
+    min_relevance_score: float = Field(default=0.25, ge=0.0, le=1.0)
     retrieval_mode: Literal["dense", "hybrid"] = "hybrid"
     history_turns: int = Field(default=6, ge=0)
 

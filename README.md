@@ -109,7 +109,7 @@ Each value has exactly one home, so nothing can be set in two places that disagr
 | `top_k` | `5` | Chunks sent to the LLM per question |
 | `retrieval_candidates` | `15` | Chunks retrieved for the reranker to choose from (at least `top_k`) |
 | `reranker_model` | `rerank-2.5` | Voyage reranker (32k-token input), `rerank-2.5-lite`, or a local ONNX cross-encoder such as `Xenova/ms-marco-MiniLM-L-6-v2`; `None` disables reranking |
-| `min_relevance_score` | `0.42` | Cosine similarity; below this the app refuses without calling the LLM. Calibrated for bge-m3 |
+| `min_relevance_score` | `0.25` | Cosine similarity; below this the app refuses without calling the LLM. Calibrated for voyage-4-large at 2048 dims (use 0.42 for bge-m3) |
 | `retrieval_mode` | `hybrid` | BM25 + dense with reciprocal rank fusion; `dense` uses embeddings only |
 | `chroma_persist_dir` | `./chroma_data` | `None` means in-memory Chroma |
 | `max_upload_mb` | `25` | Per file |
@@ -190,23 +190,24 @@ more text per prompt. The local ONNX reranker reads only 512 tokens, so keep chu
 exceeds the embedding model's window. Sizes are estimated at 4 characters per token
 rather than with a tokenizer; the estimate only needs to be roughly right.
 
-**Threshold choice.** *The value below was calibrated for bge-m3 and still needs
-re-checking for voyage-4-large.* `min_relevance_score = 0.42` comes from best-chunk
-cosine scores on the sample docs with bge-m3 at 512-token chunks:
+**Threshold choice.** `min_relevance_score = 0.25` comes from best-chunk cosine scores
+on the sample docs with voyage-4-large (2048 dims) at 512-token chunks:
 
-| Question type | Best-chunk score |
-|---|---|
-| Answerable, including 10 paraphrases | 0.467 to 0.725 |
-| Clearly off-topic (5) | 0.285 to 0.383 |
-| On-topic but unanswerable (3) | 0.360, 0.448, 0.551 |
+| Question type | voyage-4-large | bge-m3 (for comparison) |
+|---|---|---|
+| Answerable, including 10 paraphrases (22) | 0.306 to 0.589 | 0.467 to 0.725 |
+| On-topic but unanswerable (3) | 0.217, 0.289, 0.296 | 0.360, 0.448, 0.551 |
+| Clearly off-topic (5) | 0.066 to 0.170 | 0.285 to 0.383 |
 
-0.42 refuses every off-topic question without an LLM call and keeps every answerable
-one, with about 0.04 to 0.05 of margin on each side. On-topic unanswerable questions
-("Does Halcyon ship to Canada?" scores 0.55) can't be separated by any threshold, so
-the strict prompt (rule 2) handles them. bge-m3 scores run higher than MiniLM's (the
-old threshold was 0.25), which is why this must be re-checked whenever
-`embedding_model` changes, and ideally on your own documents: raising it trades false
-refusals for fewer LLM calls.
+Voyage separates the groups far better: with bge-m3, an unanswerable question
+outscored real ones. 0.25 refuses every off-topic question without an LLM call (0.08
+of margin) and keeps every answerable one (0.056 of margin). It also refuses one of
+the three unanswerable questions; the other two (0.289, 0.296) are handled by the
+strict prompt (rule 2). Raising the threshold to 0.30 would catch them too, but would
+leave only 0.006 of margin before real questions get refused. Scores depend on the
+embedding model and vector size, so re-check this whenever either changes, ideally on
+your own documents: raising it trades false refusals for fewer LLM calls. With
+bge-m3, use 0.42.
 
 **Hybrid retrieval.** `retrieval_mode = "hybrid"` merges BM25 and dense rankings with
 reciprocal rank fusion. It helps with exact tokens like part numbers that small
