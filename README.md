@@ -11,34 +11,57 @@ document set without code changes.
 - **Formats:** PDF (with page numbers), DOCX, TXT, MD
 
 ```
-Upload ──> Parse ──> Chunk (+ metadata) ──> Embed ──> Chroma collection
-                                                          │
-Question ──> Rewrite follow-ups ──> Embed ──> Retrieve 15 candidates ┘
+Upload ──> Parse ──> Chunk (+ metadata) ──> Embed (Voyage) ──> Chroma collection
+                                                                    │
+Question ──> Rewrite follow-ups ──> Embed ──> Hybrid retrieve 15 candidates (BM25 + dense)
                                                 │
                        best score < threshold? ─┴─ yes ──> "not found" (no LLM call)
                                                 │ no
-                         cross-encoder rerank ──> top 5 ──> numbered context ──> LLM
+                          rerank (Voyage) ──> top 5 ──> numbered context ──> Claude
                                                               ──> answer + [file p.N] citations
 ```
 
 ## Quick start
 
-Requires Python 3.11+, an Anthropic API key, and a Voyage AI API key (https://dash.voyageai.com).
+You need:
+
+- Python 3.11+ (developed on 3.12)
+- An Anthropic API key (https://console.anthropic.com)
+- A Voyage AI API key (https://dash.voyageai.com). Add a payment method there: without one,
+  the free-tier rate limits can throttle large ingests even though the free tokens cover the cost.
+
+**1. Install**
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
-
-cp .env.example .env               # then set ANTHROPIC_API_KEY and VOYAGE_API_KEY (secrets only)
 ```
 
-Run the API and the UI in two terminals:
+**2. Add your keys.** Copy the template and fill in both keys. `.env` holds secrets only;
+every other setting lives in [app/config.py](app/config.py).
 
 ```bash
-uvicorn app.main:app --reload                 # http://localhost:8000/docs
-streamlit run ui/streamlit_app.py             # http://localhost:8501
+cp .env.example .env               # Windows PowerShell: Copy-Item .env.example .env
 ```
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+VOYAGE_API_KEY=pa-...
+```
+
+**3. Run the API and the UI** in two terminals, from the project root:
+
+```bash
+uvicorn app.main:app --reload                 # API: http://localhost:8000/docs
+streamlit run ui/streamlit_app.py             # UI:  http://localhost:8501
+```
+
+The UI finds the API at `API_URL` (default `http://localhost:8000`). If the API runs
+elsewhere, set it before starting Streamlit, for example `API_URL=http://localhost:9000`.
+
+**4. Check it works** (optional): `pytest` runs the offline test suite in about 10 seconds,
+and `python eval/run_eval.py` runs the eval against the running API (it makes real API calls).
 
 With the default Voyage models nothing is downloaded. If you switch to the local models,
 the first startup downloads them into `~/.cache/rag-generator/models` (bge-m3 is about 2.3 GB).
@@ -47,11 +70,16 @@ the first startup downloads them into `~/.cache/rag-generator/models` (bge-m3 is
 
 ```bash
 cp .env.example .env               # set ANTHROPIC_API_KEY and VOYAGE_API_KEY
-docker compose up --build
+docker compose up --build          # first build takes a minute or two
 ```
 
-The UI is at http://localhost:8501 and the API at http://localhost:8000. The index
-persists in the `chroma_data` volume and the models in `model_cache`.
+The UI is at http://localhost:8501 and the API at http://localhost:8000; stop any local
+uvicorn or Streamlit first, since they use the same ports. The UI waits for the API's
+health check before starting. The index persists in the `chroma_data` volume across
+restarts and rebuilds, and local models (if you switch to them) cache in `model_cache`.
+Images are built from your working copy, so edits to `app/config.py` take effect on the
+next `--build`. `docker compose down` stops everything and keeps the data;
+`docker compose down -v` also deletes it.
 
 ## Using it
 
@@ -162,13 +190,28 @@ It reports:
 - **Expected facts:** key strings (such as "45" days) appear in the answer
 
 Detailed per-question results are written to `eval/results/latest.json` (or `--out`).
+The script reads the API keys from `.env` for the judge, so run it from the project root.
+
+Latest results (Voyage embeddings and reranking, hybrid retrieval, run against the
+Docker Compose stack):
+
+| Metric | Default set | Federalist Papers |
+|---|---|---|
+| Expected source in top-k / expected page | 12/12 / 4/4 | 6/6 / 6/6 |
+| Context recall / MRR | 10/10 / 1.00 | 6/6 / 1.00 |
+| Faithfulness (LLM judge) | 12/12 | 6/6 |
+| Refusal correct on unanswerable | 3/3 | 3/3 |
+
+Known gap: broad questions ("what arguments does Federalist No. 78 make?") span more
+text than the 5 chunks sent to the LLM, so answers can be faithful but incomplete.
+Raising `top_k` helps at the cost of longer prompts.
 
 ## Design trade-offs
 
 **In-memory vs persistent Chroma.** By default Chroma writes to `./chroma_data`, so
 collections survive restarts. Setting `chroma_persist_dir = None` runs it in memory:
 no setup and nothing to clean up, which suits tests and demos, but every restart
-loses all collections. To clear the index, stop the API and delete `chroma_data`. Ingestion job status is held in memory either way, so it is lost on
+loses all collections. Ingestion job status is held in memory either way, so it is lost on
 restart and doesn't work across multiple API workers. A real deployment would move
 jobs to Redis or a database table.
 
@@ -217,14 +260,13 @@ your own documents: raising it trades false refusals for fewer LLM calls. With
 bge-m3, use 0.42.
 
 **Hybrid retrieval.** `retrieval_mode = "hybrid"` merges BM25 and dense rankings with
-reciprocal rank fusion. It helps with exact tokens like part numbers that small
-embedding models blur together. RRF only picks and orders the chunks: each returned
+reciprocal rank fusion. RRF only picks and orders the chunks: each returned
 chunk keeps its dense cosine score, so the threshold means the same thing in both
 modes. It is the default because dense-only retrieval missed too much ground truth
 in practice: keyword matches catch exact names, numbers, section references and
-defined terms that embeddings blur together. With reranking on, hybrid fills the 15-candidate pool
-from both rankings (up to 60 chunks each before fusion), and the cross-encoder then
-picks the best 5. The cost is a BM25 index per collection held in memory, rebuilt
+defined terms that embeddings blur together. With reranking on, hybrid fills the
+15-candidate pool from both rankings (up to 60 chunks each before fusion), and the
+reranker then picks the best 5. The cost is a BM25 index per collection held in memory, rebuilt
 when documents are added. Set `retrieval_mode = "dense"` to go back.
 
 **Reranking.** The embedding model scores question and passage separately, so it
@@ -237,11 +279,10 @@ accurate but too slow to run over a whole collection. The default is Voyage's
 scored in full. The local ONNX alternative adds about 0.2 s per query on CPU but reads
 only 512 tokens. The threshold still uses dense cosine over all 15 candidates, so it
 means the same thing whichever reranker runs (local cross-encoder scores are
-unbounded logits with no stable cutoff anyway).
-Sources carry both `score` (cosine) and `rerank_score`. On the sample set, chunk-level
-recall@5 was already 20/20 without reranking (the corpus is only 8 to 12 chunks), but
-reranking moved the answer chunk higher: MRR went from 0.93 to 0.97 with dense
-retrieval. Expect the recall gain on larger collections, where the answer can rank
+unbounded logits with no stable cutoff anyway). Sources carry both `score` (cosine)
+and `rerank_score`. When reranking was first added (local cross-encoder, MiniLM
+embeddings), recall@5 on the small sample set was already 20/20, but reranking moved
+the answer chunk higher: MRR went from 0.93 to 0.97. Expect the recall gain on larger collections, where the answer can rank
 below 5th. Measure it with `run_eval.py`'s context recall on your own documents.
 
 **Ingestion progress.** Nearly all ingestion time is embedding, so progress is
@@ -272,7 +313,7 @@ configuration returns 409 instead of silently giving bad results.
 ```
 app/
   main.py            FastAPI routes and app wiring
-  config.py          Settings (pydantic-settings)
+  config.py          Settings (all defaults) and Secrets (API keys from .env)
   schemas.py         Request/response models
   ingest/
     parsers.py       Extension dispatcher: PDF / DOCX / TXT / MD to pages
@@ -287,11 +328,31 @@ app/
   hf.py              Model downloads from the Hugging Face Hub
   rag.py             Rewrite, retrieve, threshold, prompt, generate
   llm.py             LLM wrapper (Anthropic)
-  jobs.py            In-memory ingestion job registry
-ui/streamlit_app.py  Chat UI
-eval/                Question set, sample docs, eval runner
-tests/               pytest suite
+  jobs.py            In-memory ingestion job registry with progress and ETA
+ui/streamlit_app.py  Chat UI (HTTP only, no backend imports)
+eval/
+  run_eval.py        Eval runner
+  questions.yaml     Default question set, documents in sample_docs/
+  pg18_questions.yaml  Federalist Papers set, documents in pg18_docs/
+  make_sample_pdf.py Regenerates sample_docs/employee_handbook.pdf
+tests/               pytest suite (offline: fake embedder, LLM, reranker, Voyage client)
+Dockerfile.api, Dockerfile.ui, docker-compose.yml
 ```
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Startup fails with `VOYAGE_API_KEY is not set` | Add the key to `.env` in the project root and restart |
+| 502 "rejected the API key" | The Anthropic or Voyage key in `.env` is wrong or revoked |
+| 502 "Voyage rate limit hit" | Add a payment method to the Voyage account |
+| 409 on query: embedding model mismatch | The collection was built with a different `embedding_model` or `embedding_dimensions`. Re-ingest into a new collection, or clear the index |
+| Warning "ignoring X set in .env" | Settings belong in `app/config.py`; remove them from `.env` |
+| Collections disappear on restart | `chroma_persist_dir` is `None` (in-memory); set it to `"./chroma_data"` |
+| UI says it can't reach the API | Start uvicorn first, or set `API_URL` to where it runs |
+
+**Clearing the index:** stop the API and delete the `chroma_data` folder (with Docker:
+`docker compose down -v`). Both commands delete every collection.
 
 ## Tests
 
@@ -301,6 +362,8 @@ pytest
 
 The tests use a deterministic fake embedder and a fake LLM, so they run offline in
 a couple of seconds. They cover the parser dispatcher, the chunker, the threshold
-refusal path (asserting the LLM is never called), reranking (candidates in, top-k out), the Voyage clients (against a fake client: input types, request splitting, error mapping), collection isolation (store and
-API level), dedup, embedding batching, the embedding-model mismatch check, hybrid
-retrieval, and the HTTP endpoints including streaming.
+refusal path (asserting the LLM is never called), reranking (candidates in, top-k
+out), the Voyage clients (against a fake client: input types, request splitting,
+error mapping), collection isolation (store and API level), dedup, embedding
+batching, the embedding-model mismatch check, hybrid retrieval, ingestion progress,
+the single-source config rules, and the HTTP endpoints including streaming.

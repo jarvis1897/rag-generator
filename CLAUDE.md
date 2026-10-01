@@ -14,11 +14,12 @@ In scope:
 - Question answering with citations
 - A refusal when the documents don't contain the answer
 - A small eval script
+- Reranking (added on request): retrieve `retrieval_candidates`, rerank, send `top_k` to the LLM
 
 Out of scope for now. Do not add these unless asked:
 - Tool calling or agent loops. The chat path is a plain retrieve-then-generate pipeline.
 - Auth, multi-tenancy, user accounts
-- Re-ranking models, fine-tuning, OCR for scanned PDFs
+- Fine-tuning, OCR for scanned PDFs
 
 ## Stack
 
@@ -26,19 +27,24 @@ Out of scope for now. Do not add these unless asked:
 - Frontend: Streamlit, which talks to the backend over HTTP only. It does not import backend modules.
 - Vector store: Chroma. Use the persistent client when `chroma_persist_dir` is set, otherwise the in-memory client.
 - Parsing: PyMuPDF for PDFs, python-docx for DOCX, plain read for TXT and MD
+- Embeddings and reranking: Voyage AI (`voyage-4-large` at 2048 dims, `rerank-2.5`) by default, behind wrappers. Local alternatives (bge-m3, an ONNX cross-encoder) stay selectable for documents that must not leave the machine.
+- LLM: Anthropic Claude (`claude-opus-5`)
 - Config: a plain `Settings` model in `app/config.py` for all settings; pydantic-settings `Secrets` reads only API keys from env or `.env`
 
 ## Architecture
 
 ```
-Upload ──> Parse ──> Chunk (+ metadata) ──> Embed ──> Chroma collection
-                                                          │
-Question ──> Embed query (same model) ──> Retrieve top-k ─┘
-                │
-                └──> Score threshold check ──> Build prompt ──> LLM ──> Answer + citations
+Upload ──> Parse ──> Chunk (+ metadata) ──> Embed (batched) ──> Chroma collection
+                                                                      │
+Question ──> Rewrite follow-up ──> Embed query (same model) ──> Hybrid retrieve (BM25 + dense, RRF)
+                                                                      │  retrieval_candidates
+                         Score threshold check (dense cosine) <───────┘
+                           │ pass                    │ fail
+                           ▼                         └──> grounded: false, no LLM call
+                         Rerank ──> top_k ──> Build prompt ──> LLM ──> Answer + citations
 ```
 
-Ingestion and query must use the same embedding model. Store the model name in the collection metadata and reject queries if the configured model doesn't match.
+Ingestion and query must use the same embedding model and vector size. Store the model name (with dimensions, e.g. `voyage-4-large@2048`) in the collection metadata and reject queries if the configured model doesn't match. The threshold always uses dense cosine, never reranker scores, so it means the same thing whichever reranker runs.
 
 ## Layout
 
@@ -91,7 +97,7 @@ Every query is scoped to exactly one collection. Never search across collections
 
 - Dispatch parsers by file extension. Reject unsupported types with a clear 400 error.
 - Keep page numbers from PDFs so citations can point to a page.
-- Chunking: recursive split on paragraphs, then sentences. Defaults are about 800 tokens with about 100 overlap, both configurable.
+- Chunking: recursive split on paragraphs, then sentences. Defaults are 512 tokens with 80 overlap (`chunk_size`, `chunk_overlap`); see the README for why not larger.
 - Chunk metadata: `doc_id`, `filename`, `page`, `chunk_index`, `content_hash`. Chroma metadata values must be str, int, float, or bool. No lists, no None.
 - Hash file contents with SHA-256 and skip files already in the collection.
 - Batch embedding calls. Do not embed one chunk per request.
@@ -100,7 +106,7 @@ Every query is scoped to exactly one collection. Never search across collections
 
 These are the core of the project. Keep them strict.
 
-1. If the best retrieved chunk is below `MIN_RELEVANCE_SCORE`, return `grounded: false` with a fixed "not found in the documents" message, and do not call the LLM.
+1. If the best retrieved chunk is below `min_relevance_score`, return `grounded: false` with a fixed "not found in the documents" message, and do not call the LLM.
 2. The system prompt tells the model to answer only from the provided context, to say so when the context is insufficient, and to cite sources inline as `[filename p.N]`.
 3. Number each context chunk in the prompt with its filename and page so the model can cite it.
 4. Always return the retrieved sources to the client, even when the answer cites only some of them.
@@ -130,9 +136,11 @@ Do not hardcode any of these in application code. API keys come from env only an
 
 ## Stretch goals (only after the core works)
 
-- Hybrid retrieval: BM25 (`rank_bm25`) plus dense, merged with reciprocal rank fusion
-- Streaming responses end to end
-- Docker Compose for both services
+All three are done:
+
+- Hybrid retrieval: BM25 (`rank_bm25`) plus dense, merged with reciprocal rank fusion (the default)
+- Streaming responses end to end (`/query/stream`, used by the UI)
+- Docker Compose for both services (verified end to end)
 
 ## Conventions
 
